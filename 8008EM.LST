@@ -1,0 +1,2637 @@
+Microsoft (R) Macro Assembler Version 6.00AD    	    06/01/25 13:37:13
+8008em.asm						     Page 1 - 1
+
+
+				;	8008 instruction executor for x86 Rev. 1.00
+				;
+				;	Copyright (C) 2025 by Gazelle
+				;
+				;Permission is hereby granted, free of charge, to any person
+				;obtaining a copy of this software and associated documentation
+				;files (the "Software"), to deal in the Software without
+				;restriction, including without limitation the rights to use,
+				;copy, modify, merge, publish, distribute, sublicense, and/or sell
+				;copies of the Software, and to permit persons to whom the
+				;Software is furnished to do so, subject to the following
+				;conditions:
+				;
+				;The above copyright notice and this permission notice shall be
+				;included in all copies or substantial portions of the Software.
+				;
+				;THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+				;EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+				;OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+				;NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+				;HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+				;WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+				;FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+				;OTHER DEALINGS IN THE SOFTWARE.
+
+				;Repository https://github.com/Gazelle8087/8008-instruction-executor-for-x86
+				;
+				;2025/6/1 Rev. 1.00 Initial release
+
+					page 0,100
+					.model	small
+ 0000					.code
+
+					assume	ds:nothing,es:nothing,ss:nothing
+				;
+				;	Entry point : nnnn:0e0h (far call)
+				;	DS must point base of 8008 instruction code area
+				;
+				;	DI must be set as step counter.
+				;	If DI is 0 at entry, execute continuously without step break
+				;	
+				;	step counter is decremented by 1 each instruction executed,
+				;	break when step counter becomes 0.
+				;
+				;	return condition
+				;
+				;	SI have the address where the code here under was fetched.
+				;	DI have the return code corresponding to the code here under
+				.
+				;
+				;	HLT(code 00)---- 0fdh
+				;	HLT(code 01)---- 0feh
+				;	HLT(code FF)---- 0ffh
+				;	Undefined code - 0fch
+				;
+				;	Step break ----- 0fbh
+				;
+				;	IN -- port number(00h-07h)
+				;	OUT - port number(08h-1fh)
+				;
+				;	register assign
+				;
+				;	A    : al
+				;	flag : ah (invisible from 8008 software)
+				;	B    : ch
+				;	C    : cl
+				;	D    : dh
+				;	E    : dl
+				;	H    : bh
+				;	L    : bl
+				;	PC   : si
+				;	SP   : bp (invisible from 8008 software)
+				;
+				;-----------------------------------------------
+ = 00FB				code_step	equ	0fbh
+ = 00FC				code_undef1	equ	0fch
+ = 00FD				code_HLT_00	equ	0fdh
+ = 00FE				code_HLT_01	equ	0feh
+ = 00FF				code_HLT_FF	equ	0ffh
+
+ = 3FFF				address_mask	equ	3fffh
+ = 000F				stack_mask	equ	0fh
+ = 4004				stack_area	equ	4004h
+
+ = word ptr ds:[4002h]		step_flg	equ	word ptr ds:[4002h]
+ = byte ptr ds:[4001h]		reg_h		equ	byte ptr ds:[4001h]
+ = byte ptr ds:[4000h]		reg_l		equ	byte ptr ds:[4000h]
+ = word ptr ds:[4000h]		reg_w		equ	word ptr ds:[4000h]
+				;-------------------------------------
+ = cx				temp		equ	cx
+				;temp		equ	dx
+				;-------------------------------------
+				ifidni		temp,<dx>
+				elseifidni	temp,<cx>
+ = ch				temp_h		equ	ch
+ = cl				temp_l		equ	cl
+ = reg_h			B		equ	reg_h
+ = reg_l			C_reg		equ	reg_l
+ = dh				D		equ	dh
+ = dl				E		equ	dl
+				endif
+
+ = si				PC80		equ	si
+ = bp				SP80		equ	bp
+ = bx				HL		equ	bx
+
+ = al				A		equ	al
+ = bh				H		equ	bh
+ = bl				L		equ	bl
+ = byte ptr ds:[di]		M		equ	byte ptr ds:[di]
+				;======================================
+						org	80h
+ 0080				continue:
+ 0080  8B 3E 4002				mov	di,step_flg
+ 0084  23 FF					and	di,di
+ 0086  75 09					jnz	exe_count
+
+ 0088  8A 2C					mov	temp_h,ds:[PC80]
+ 008A  46					inc	PC80
+ 008B  81 E6 3FFF				and	PC80,address_mask
+ 008F  FF E1					jmp	temp
+ 0091				exe_count:
+ 0091  4F					dec	di
+ 0092  89 3E 4002				mov	step_flg,di
+ 0096  74 09					jz	em_break
+
+ 0098  8A 2C					mov	temp_h,ds:[PC80]
+ 009A  46					inc	PC80
+ 009B  81 E6 3FFF				and	PC80,address_mask
+ 009F  FF E1					jmp	temp
+ 00A1				em_break:
+ 00A1  8B 0E 4000				mov	temp,reg_w
+ 00A5  BF 00FB					mov	di,code_step
+ 00A8  CB					retf
+				;=======================================
+						org	0e0h
+ 00E0				entry:
+ 00E0  89 0E 4000				mov	reg_w,temp
+ 00E4  83 E5 0F					and	SP80,stack_mask
+ 00E7  89 3E 4002				mov	ds:step_flg,di
+
+ 00EB  8A 2C					mov	temp_h,ds:[PC80]
+ 00ED  B1 00					mov	temp_l,0
+ 00EF  46					inc	PC80
+ 00F0  81 E6 3FFF				and	PC80,address_mask
+ 00F4  FF E1					jmp	temp
+				;======================================
+				fetch1		macro
+						jmp	continue
+
+				;		mov	temp_h,ds:[PC80]
+				;		inc	PC80
+				;		and	PC80,address_mask
+				;		jmp	temp
+				endm
+				;======= M1 cycle ===============================
+
+				;--- LD	reg8,imm8
+				MVI		macro	dst
+
+				ifidni		dst,reg_l
+						mov	temp_h,ds:[PC80]
+						mov	dst,temp_h
+
+				elseifidni	dst,reg_h
+						mov	temp_h,ds:[PC80]
+						mov	dst,temp_h
+
+				elseifidni	dst,M
+						mov	di,HL
+						and	di,address_mask
+						mov	temp_h,ds:[PC80]
+						mov	dst,temp_h
+				else
+						mov	dst,ds:[PC80]
+				endif
+						inc	PC80
+						and	PC80,address_mask
+						fetch1
+				endm
+
+				;--- INC reg8
+				INR		macro	src
+
+						sahf
+						inc	src
+						lahf
+						fetch1
+				endm
+
+				;--- DEC reg8
+				DCR		macro	src
+
+						sahf
+						dec	src
+						lahf
+						fetch1
+				endm
+
+				;################################################
+				;--- LD ??,??
+				;LD		macro	dst,src
+				;
+				;		mov	di,HL
+				;		and	di,address_mask
+				;		mov	temp_h,src
+				;		mov	dst,temp_h
+				;
+				;		fetch1
+				;endm
+
+				LD		macro	dst,src
+				;================================================
+				ifidni		dst,src
+
+				else
+					ifidni		dst,reg_l
+
+						ifidni		src,reg_h
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						elseifidni	src,M
+							mov	di,HL
+							and	di,address_mask
+							mov	temp_h,src
+							mov	dst,temp_h
+						else
+							mov	dst,src
+						endif
+
+					elseifidni	src,reg_l
+
+						ifidni		dst,reg_h
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						elseifidni	dst,M
+							mov	di,HL
+							and	di,address_mask
+							mov	temp_h,src
+							mov	dst,temp_h
+						else
+							mov	dst,src
+						endif
+
+					elseifidni	dst,reg_h
+
+						ifidni		src,reg_l
+
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						elseifidni	src,M
+
+							mov	di,HL
+							and	di,address_mask
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						else
+							mov	dst,src
+						endif
+
+					elseifidni	src,reg_h
+
+						ifidni		dst,reg_l
+
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						elseifidni	dst,M
+
+							mov	di,HL
+							and	di,address_mask
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						else
+							mov	dst,src
+						endif
+
+					elseifidni	dst,M
+					
+						ifidni		src,reg_l
+
+							mov	di,HL
+							and	di,address_mask
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						elseifidni	src,reg_h
+
+							mov	di,HL
+							and	di,address_mask
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						else
+							mov	di,HL
+							and	di,address_mask
+							mov	dst,src
+						endif
+
+					elseifidni	src,M
+
+						ifidni		dst,reg_l
+
+							mov	di,HL
+							and	di,address_mask
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						elseifidni	dst,reg_h
+
+							mov	di,HL
+							and	di,address_mask
+							mov	temp_h,src
+							mov	dst,temp_h
+
+						else
+							mov	di,HL
+							and	di,address_mask
+							mov	dst,src
+						endif
+					else
+						mov	dst,src
+					endif
+				;================================================
+				endif
+							fetch1
+				endm
+				;################################################
+
+				;--- ADD A,reg8
+				ADD8	macro	src
+
+				ifidni	src,M
+						mov	di,HL
+						and	di,address_mask
+				endif
+						add	A,src
+						lahf
+						fetch1
+				endm
+
+				;--- ADC A,reg8
+				ADC8		macro	src
+
+				ifidni	src,M
+						mov	di,HL
+						and	di,address_mask
+				endif
+						sahf
+						adc	A,src
+						lahf
+						fetch1
+				endm
+
+				;---  SUB reg8
+				SUB8	macro	src
+
+				ifidni	src,M
+						mov	di,HL
+						and	di,address_mask
+				endif
+						sub	A,src
+						lahf
+						fetch1
+				endm
+
+				;---  SBC A,reg8
+				SBC8	macro	src
+
+				ifidni	src,M
+						mov	di,HL
+						and	di,address_mask
+				endif
+						sahf
+						sbb	A,src
+						lahf
+						fetch1
+				endm
+
+				;--- AND reg8
+				ANA	macro	src
+
+				ifidni	src,M
+						mov	di,HL
+						and	di,address_mask
+				endif
+						and	A,src
+						lahf
+						fetch1
+				endm
+
+				;---  OR reg8
+				ORA	macro	src
+
+				ifidni	src,M
+						mov	di,HL
+						and	di,address_mask
+				endif
+						or	A,src
+						lahf
+						fetch1
+				endm
+
+				;--- XOR reg8
+				XRA	macro	src
+
+				ifidni	src,M
+						mov	di,HL
+						and	di,address_mask
+				endif
+						xor	A,src
+						lahf
+						fetch1
+				endm
+
+				;--- CP reg8
+				CPA	macro	src
+
+				ifidni	src,M
+						mov	di,HL
+						and	di,address_mask
+				endif
+						cmp	A,src
+						lahf
+						fetch1
+				endm
+
+				;--- CALL cc,nn
+				CALL80		macro	cc
+
+				ifnb		<cc>
+						sahf
+						j&cc	@f
+						add	PC80,2
+						and	PC80,address_mask
+						fetch1
+				@@:
+				endif
+						mov	temp_l,ds:[PC80]
+						inc	PC80
+						and	PC80,address_mask
+						mov	temp_h,ds:[PC80]
+						inc	PC80
+						and	PC80,address_mask
+						add	SP80,2
+						and	SP80,stack_mask
+						mov	ds:[SP80+stack_area],PC80
+						mov	PC80,temp
+						mov	temp_l,0
+						fetch1
+				endm
+
+				;--- JP cc,nn
+				JP80		macro	cc
+
+				ifnb		<cc>
+						sahf
+						j&cc	@f
+						add	PC80,2
+						and	PC80,address_mask
+						fetch1
+				@@:
+				endif
+						mov	temp_l,ds:[PC80]
+						inc	PC80
+						and	PC80,address_mask
+						mov	temp_h,ds:[PC80]
+						mov	PC80,temp
+						mov	temp_l,0
+						fetch1
+				endm
+
+				;--- RET cc
+				RET80		macro	cc
+				ifnb		<cc>
+						sahf
+						j&cc	@f
+						fetch1
+				@@:
+				endif
+						mov	PC80,ds:[SP80+stack_area]
+						sub	SP80,2
+						and	SP80,stack_mask
+						fetch1
+				endm
+
+				;--- RST n
+				RST		macro	nn
+						add	SP80,2
+						and	SP80,stack_mask
+						mov	ds:[SP80+stack_area],PC80
+						mov	PC80,nn
+						fetch1
+				endm
+
+				;--- IN n
+				IN08		macro	nn
+						mov	temp,reg_w
+						mov	di,nn
+						retf
+				endm
+
+				;--- OUT n
+				OUT08		macro	nn
+						mov	temp,reg_w
+						mov	di,nn
+						retf
+				endm
+
+				;---- HLT
+				HLT08		macro	nn
+						mov	temp,reg_w
+						mov	di,nn
+						retf
+				endm
+				;======================================
+ = 0000				op2	=	0
+
+				M1	macro	nn
+					rept	nn - op2
+						org	op2 * 100h
+						mov	temp,reg_w
+						mov	di,code_undef1
+						retf
+						op2	= op2 + 1
+					endm
+					op2	= nn + 1
+					org	nn * 100h
+				endm
+				;--------------------------------------
+				M1	00				;HLT
+ = 0001			     1		op2	= 00 + 1
+						HLT08	code_HLT_00
+ 0000  8B 0E 4000	     1			mov	temp,reg_w
+ 0004  BF 00FD		     1			mov	di,code_HLT_00
+ 0007  CB		     1			retf
+
+ 0008 0D 0A 38 30 30 38		exe_msg		db	0dh,0ah,'8008 instruction executor for x86 R
+       20 69 6E 73 74 72	ev. 1.00  ',0dh,0ah
+       75 63 74 69 6F 6E
+       20 65 78 65 63 75
+       74 6F 72 20 66 6F
+       72 20 78 38 36 20
+       52 65 76 2E 20 31
+       2E 30 30 20 20 0D
+       0A
+ 0039  43 6F 70 79 72 69			db	'Copyright (c) 2025 by Gazelle.  ',0dh,0ah
+       67 68 74 20 28 63
+       29 20 32 30 32 35
+       20 62 79 20 47 61
+       7A 65 6C 6C 65 2E
+       20 20 0D 0A
+ 005B  68 74 74 70 73 3A			db	'https://github.com/Gazelle8087  ',0dh,0ah,2
+       2F 2F 67 69 74 68	4h
+       75 62 2E 63 6F 6D
+       2F 47 61 7A 65 6C
+       6C 65 38 30 38 37
+       20 20 0D 0A 24
+
+				M1	01				;HLT
+ = 0002			     1		op2	= 01 + 1
+						HLT08	code_HLT_01
+ 0100  8B 0E 4000	     1			mov	temp,reg_w
+ 0104  BF 00FE		     1			mov	di,code_HLT_01
+ 0107  CB		     1			retf
+
+				M1	02				;RLC	RLCA
+ = 0003			     1		op2	= 02 + 1
+ 0200  9E					sahf
+ 0201  D0 C0					rol	A,1
+ 0203  9F					lahf
+						fetch1
+ 0204  E9 FE79		     1			jmp	continue
+				M1	03				;RNC
+ = 0004			     1		op2	= 03 + 1
+						RET80	NC
+ 0300  9E		     1			sahf
+ 0301  73 03		     1			jNC	@f
+ 0303  E9 FD7A		     2			jmp	continue
+ 0306			     1	@@:
+ 0306  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 030B  83 ED 02		     1			sub	SP80,2
+ 030E  83 E5 0F		     1			and	SP80,stack_mask
+ 0311  E9 FD6C		     2			jmp	continue
+				M1	04				;ADI	n
+ = 0005			     1		op2	= 04 + 1
+ 0400  02 04					add	A,ds:[PC80]
+ 0402  9F					lahf
+ 0403  46					inc	PC80
+ 0404  81 E6 3FFF				and	PC80,address_mask
+						fetch1
+ 0408  E9 FC75		     1			jmp	continue
+				M1	05				;RST	0	
+ = 0006			     1		op2	= 05 + 1
+						RST	0
+ 0500  83 C5 02		     1			add	SP80,2
+ 0503  83 E5 0F		     1			and	SP80,stack_mask
+ 0506  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 050B  BE 0000		     1			mov	PC80,0
+ 050E  E9 FB6F		     2			jmp	continue
+				M1	06				;MVI	A,nn
+ = 0007			     1		op2	= 06 + 1
+						MVI	A
+ 0600  8A 04		     1			mov	A,ds:[PC80]
+ 0602  46		     1			inc	PC80
+ 0603  81 E6 3FFF	     1			and	PC80,address_mask
+ 0607  E9 FA76		     2			jmp	continue
+				M1	07				;RET
+ = 0008			     1		op2	= 07 + 1
+						RET80
+ 0700  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 0705  83 ED 02		     1			sub	SP80,2
+ 0708  83 E5 0F		     1			and	SP80,stack_mask
+ 070B  E9 F972		     2			jmp	continue
+				;--------------------------------------
+				M1	08				;INR	B
+ = 0009			     1		op2	= 08 + 1
+						INR	B
+ 0800  9E		     1			sahf
+ 0801  FE 06 4001	     1			inc	B
+ 0805  9F		     1			lahf
+ 0806  E9 F877		     2			jmp	continue
+				M1	09				;DCR	B
+ = 000A			     1		op2	= 09 + 1
+						DCR	B
+ 0900  9E		     1			sahf
+ 0901  FE 0E 4001	     1			dec	B
+ 0905  9F		     1			lahf
+ 0906  E9 F777		     2			jmp	continue
+				M1	0AH				;RRC	RRCA
+ = 000B			     1		op2	= 0AH + 1
+ 0A00  9E					sahf
+ 0A01  D0 C8					ror	A,1
+ 0A03  9F					lahf
+						fetch1
+ 0A04  E9 F679		     1			jmp	continue
+				M1	0BH				;RNZ
+ = 000C			     1		op2	= 0BH + 1
+						RET80	NZ
+ 0B00  9E		     1			sahf
+ 0B01  75 03		     1			jNZ	@f
+ 0B03  E9 F57A		     2			jmp	continue
+ 0B06			     1	@@:
+ 0B06  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 0B0B  83 ED 02		     1			sub	SP80,2
+ 0B0E  83 E5 0F		     1			and	SP80,stack_mask
+ 0B11  E9 F56C		     2			jmp	continue
+				M1	0CH				;ACI	nn
+ = 000D			     1		op2	= 0CH + 1
+ 0C00  9E					sahf
+ 0C01  12 04					adc	A,ds:[PC80]
+ 0C03  9F					lahf
+ 0C04  46					inc	PC80
+ 0C05  81 E6 3FFF				and	PC80,address_mask
+						fetch1
+ 0C09  E9 F474		     1			jmp	continue
+				M1	0DH				;RST	1
+ = 000E			     1		op2	= 0DH + 1
+						RST	8
+ 0D00  83 C5 02		     1			add	SP80,2
+ 0D03  83 E5 0F		     1			and	SP80,stack_mask
+ 0D06  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 0D0B  BE 0008		     1			mov	PC80,8
+ 0D0E  E9 F36F		     2			jmp	continue
+				M1	0EH				;MVI	B
+ = 000F			     1		op2	= 0EH + 1
+						MVI	B
+
+ 0E00  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 0E02  88 2E 4001	     1			mov	B,temp_h
+ 0E06  46		     1			inc	PC80
+ 0E07  81 E6 3FFF	     1			and	PC80,address_mask
+ 0E0B  E9 F272		     2			jmp	continue
+				M1	0FH				;RET
+ = 0010			     1		op2	= 0FH + 1
+						RET80
+ 0F00  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 0F05  83 ED 02		     1			sub	SP80,2
+ 0F08  83 E5 0F		     1			and	SP80,stack_mask
+ 0F0B  E9 F172		     2			jmp	continue
+				;--------------------------------------
+				M1	10H				;INR	C
+ = 0011			     1		op2	= 10H + 1
+						INR	C_reg
+ 1000  9E		     1			sahf
+ 1001  FE 06 4000	     1			inc	C_reg
+ 1005  9F		     1			lahf
+ 1006  E9 F077		     2			jmp	continue
+				M1	11h				;DCR	C
+ = 0012			     1		op2	= 11h + 1
+						DCR	C_reg
+ 1100  9E		     1			sahf
+ 1101  FE 0E 4000	     1			dec	C_reg
+ 1105  9F		     1			lahf
+ 1106  E9 EF77		     2			jmp	continue
+				M1	12H				;RAL	RLA
+ = 0013			     1		op2	= 12H + 1
+ 1200  9E					sahf
+ 1201  D0 D0					rcl	A,1
+ 1203  9F					lahf
+						fetch1
+ 1204  E9 EE79		     1			jmp	continue
+				M1	13H				;RP
+ = 0014			     1		op2	= 13H + 1
+						RET80	NS
+ 1300  9E		     1			sahf
+ 1301  79 03		     1			jNS	@f
+ 1303  E9 ED7A		     2			jmp	continue
+ 1306			     1	@@:
+ 1306  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 130B  83 ED 02		     1			sub	SP80,2
+ 130E  83 E5 0F		     1			and	SP80,stack_mask
+ 1311  E9 ED6C		     2			jmp	continue
+				M1	14H				;SUI	nn
+ = 0015			     1		op2	= 14H + 1
+ 1400  2A 04					sub	A,ds:[PC80]
+ 1402  9F					lahf
+ 1403  46					inc	PC80
+ 1404  81 E6 3FFF				and	PC80,address_mask
+						fetch1
+ 1408  E9 EC75		     1			jmp	continue
+				M1	15H				;RST	2
+ = 0016			     1		op2	= 15H + 1
+						RST	10h
+ 1500  83 C5 02		     1			add	SP80,2
+ 1503  83 E5 0F		     1			and	SP80,stack_mask
+ 1506  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 150B  BE 0010		     1			mov	PC80,10h
+ 150E  E9 EB6F		     2			jmp	continue
+				M1	16H				;MVI	C,nn
+ = 0017			     1		op2	= 16H + 1
+						MVI	C_reg
+ 1600  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 1602  88 2E 4000	     1			mov	C_reg,temp_h
+ 1606  46		     1			inc	PC80
+ 1607  81 E6 3FFF	     1			and	PC80,address_mask
+ 160B  E9 EA72		     2			jmp	continue
+				M1	17H				;RET
+ = 0018			     1		op2	= 17H + 1
+						RET80
+ 1700  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 1705  83 ED 02		     1			sub	SP80,2
+ 1708  83 E5 0F		     1			and	SP80,stack_mask
+ 170B  E9 E972		     2			jmp	continue
+				;--------------------------------------
+				M1	18H				;INR	D
+ = 0019			     1		op2	= 18H + 1
+						INR	D
+ 1800  9E		     1			sahf
+ 1801  FE C6		     1			inc	D
+ 1803  9F		     1			lahf
+ 1804  E9 E879		     2			jmp	continue
+				M1	19H				;DCR	D
+ = 001A			     1		op2	= 19H + 1
+						DCR	D
+ 1900  9E		     1			sahf
+ 1901  FE CE		     1			dec	D
+ 1903  9F		     1			lahf
+ 1904  E9 E779		     2			jmp	continue
+				M1	1AH				;RAR		RRA
+ = 001B			     1		op2	= 1AH + 1
+ 1A00  9E					sahf
+ 1A01  D0 D8					rcr	A,1
+ 1A03  9F					lahf
+						fetch1
+ 1A04  E9 E679		     1			jmp	continue
+				M1	1BH				;RPO
+ = 001C			     1		op2	= 1BH + 1
+						RET80	PO
+ 1B00  9E		     1			sahf
+ 1B01  7B 03		     1			jPO	@f
+ 1B03  E9 E57A		     2			jmp	continue
+ 1B06			     1	@@:
+ 1B06  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 1B0B  83 ED 02		     1			sub	SP80,2
+ 1B0E  83 E5 0F		     1			and	SP80,stack_mask
+ 1B11  E9 E56C		     2			jmp	continue
+				M1	1CH				;SBI	n
+ = 001D			     1		op2	= 1CH + 1
+ 1C00  9E					sahf		
+ 1C01  1A 04					sbb	A,ds:[PC80]
+ 1C03  9F					lahf
+ 1C04  46					inc	PC80
+ 1C05  81 E6 3FFF				and	PC80,address_mask
+						fetch1
+ 1C09  E9 E474		     1			jmp	continue
+				M1	1DH				;RST	3
+ = 001E			     1		op2	= 1DH + 1
+						RST	18H
+ 1D00  83 C5 02		     1			add	SP80,2
+ 1D03  83 E5 0F		     1			and	SP80,stack_mask
+ 1D06  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 1D0B  BE 0018		     1			mov	PC80,18H
+ 1D0E  E9 E36F		     2			jmp	continue
+				M1	1EH				;MVI	D,n
+ = 001F			     1		op2	= 1EH + 1
+						MVI	D
+ 1E00  8A 34		     1			mov	D,ds:[PC80]
+ 1E02  46		     1			inc	PC80
+ 1E03  81 E6 3FFF	     1			and	PC80,address_mask
+ 1E07  E9 E276		     2			jmp	continue
+				M1	1FH				;RET
+ = 0020			     1		op2	= 1FH + 1
+						RET80
+ 1F00  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 1F05  83 ED 02		     1			sub	SP80,2
+ 1F08  83 E5 0F		     1			and	SP80,stack_mask
+ 1F0B  E9 E172		     2			jmp	continue
+				;--------------------------------------
+				M1	20H				;INR	E
+ = 0021			     1		op2	= 20H + 1
+						INR	E
+ 2000  9E		     1			sahf
+ 2001  FE C2		     1			inc	E
+ 2003  9F		     1			lahf
+ 2004  E9 E079		     2			jmp	continue
+				M1	21H				;DCR	E
+ = 0022			     1		op2	= 21H + 1
+						DCR	E
+ 2100  9E		     1			sahf
+ 2101  FE CA		     1			dec	E
+ 2103  9F		     1			lahf
+ 2104  E9 DF79		     2			jmp	continue
+				M1	23H				;RC
+ 2200  8B 0E 4000	     2			mov	temp,reg_w
+ 2204  BF 00FC		     2			mov	di,code_undef1
+ 2207  CB		     2			retf
+ = 0023			     2			op2	= op2 + 1
+ = 0024			     1		op2	= 23H + 1
+						RET80	C
+ 2300  9E		     1			sahf
+ 2301  72 03		     1			jC	@f
+ 2303  E9 DD7A		     2			jmp	continue
+ 2306			     1	@@:
+ 2306  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 230B  83 ED 02		     1			sub	SP80,2
+ 230E  83 E5 0F		     1			and	SP80,stack_mask
+ 2311  E9 DD6C		     2			jmp	continue
+				M1	24H				;ANI	n
+ = 0025			     1		op2	= 24H + 1
+ 2400  22 04					AND	A,ds:[PC80]
+ 2402  9F					lahf
+ 2403  46					inc	PC80
+ 2404  81 E6 3FFF				and	PC80,address_mask
+						fetch1
+ 2408  E9 DC75		     1			jmp	continue
+				M1	25H				;RST	4
+ = 0026			     1		op2	= 25H + 1
+						RST	20H
+ 2500  83 C5 02		     1			add	SP80,2
+ 2503  83 E5 0F		     1			and	SP80,stack_mask
+ 2506  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 250B  BE 0020		     1			mov	PC80,20H
+ 250E  E9 DB6F		     2			jmp	continue
+				M1	26H				;MVI	E,nn
+ = 0027			     1		op2	= 26H + 1
+						MVI	E
+ 2600  8A 14		     1			mov	E,ds:[PC80]
+ 2602  46		     1			inc	PC80
+ 2603  81 E6 3FFF	     1			and	PC80,address_mask
+ 2607  E9 DA76		     2			jmp	continue
+				M1	27H				;RET
+ = 0028			     1		op2	= 27H + 1
+						RET80
+ 2700  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 2705  83 ED 02		     1			sub	SP80,2
+ 2708  83 E5 0F		     1			and	SP80,stack_mask
+ 270B  E9 D972		     2			jmp	continue
+				;--------------------------------------
+				M1	28H				;INR	H
+ = 0029			     1		op2	= 28H + 1
+						INR	H
+ 2800  9E		     1			sahf
+ 2801  FE C7		     1			inc	H
+ 2803  9F		     1			lahf
+ 2804  E9 D879		     2			jmp	continue
+				M1	29H				;DCR	H
+ = 002A			     1		op2	= 29H + 1
+						DCR	H
+ 2900  9E		     1			sahf
+ 2901  FE CF		     1			dec	H
+ 2903  9F		     1			lahf
+ 2904  E9 D779		     2			jmp	continue
+				M1	2BH				;RZ
+ 2A00  8B 0E 4000	     2			mov	temp,reg_w
+ 2A04  BF 00FC		     2			mov	di,code_undef1
+ 2A07  CB		     2			retf
+ = 002B			     2			op2	= op2 + 1
+ = 002C			     1		op2	= 2BH + 1
+						RET80	Z
+ 2B00  9E		     1			sahf
+ 2B01  74 03		     1			jZ	@f
+ 2B03  E9 D57A		     2			jmp	continue
+ 2B06			     1	@@:
+ 2B06  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 2B0B  83 ED 02		     1			sub	SP80,2
+ 2B0E  83 E5 0F		     1			and	SP80,stack_mask
+ 2B11  E9 D56C		     2			jmp	continue
+				M1	2CH				;XRI	n
+ = 002D			     1		op2	= 2CH + 1
+ 2C00  32 04					XOR	A,ds:[PC80]
+ 2C02  9F					lahf
+ 2C03  46					inc	PC80
+ 2C04  81 E6 3FFF				and	PC80,address_mask
+						fetch1
+ 2C08  E9 D475		     1			jmp	continue
+				M1	2DH				;RST	5
+ = 002E			     1		op2	= 2DH + 1
+						RST	28H
+ 2D00  83 C5 02		     1			add	SP80,2
+ 2D03  83 E5 0F		     1			and	SP80,stack_mask
+ 2D06  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 2D0B  BE 0028		     1			mov	PC80,28H
+ 2D0E  E9 D36F		     2			jmp	continue
+				M1	2EH				;MVI	H,n
+ = 002F			     1		op2	= 2EH + 1
+						MVI	H
+ 2E00  8A 3C		     1			mov	H,ds:[PC80]
+ 2E02  46		     1			inc	PC80
+ 2E03  81 E6 3FFF	     1			and	PC80,address_mask
+ 2E07  E9 D276		     2			jmp	continue
+				M1	2FH				;RET
+ = 0030			     1		op2	= 2FH + 1
+						RET80
+ 2F00  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 2F05  83 ED 02		     1			sub	SP80,2
+ 2F08  83 E5 0F		     1			and	SP80,stack_mask
+ 2F0B  E9 D172		     2			jmp	continue
+				;--------------------------------------
+				M1	30H				;INR	L
+ = 0031			     1		op2	= 30H + 1
+						INR	L
+ 3000  9E		     1			sahf
+ 3001  FE C3		     1			inc	L
+ 3003  9F		     1			lahf
+ 3004  E9 D079		     2			jmp	continue
+				M1	31H				;DCR	L
+ = 0032			     1		op2	= 31H + 1
+						DCR	L
+ 3100  9E		     1			sahf
+ 3101  FE CB		     1			dec	L
+ 3103  9F		     1			lahf
+ 3104  E9 CF79		     2			jmp	continue
+				M1	33H				;RM
+ 3200  8B 0E 4000	     2			mov	temp,reg_w
+ 3204  BF 00FC		     2			mov	di,code_undef1
+ 3207  CB		     2			retf
+ = 0033			     2			op2	= op2 + 1
+ = 0034			     1		op2	= 33H + 1
+						RET80	S
+ 3300  9E		     1			sahf
+ 3301  78 03		     1			jS	@f
+ 3303  E9 CD7A		     2			jmp	continue
+ 3306			     1	@@:
+ 3306  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 330B  83 ED 02		     1			sub	SP80,2
+ 330E  83 E5 0F		     1			and	SP80,stack_mask
+ 3311  E9 CD6C		     2			jmp	continue
+				M1	34H				;ORI	nn
+ = 0035			     1		op2	= 34H + 1
+ 3400  0A 04					OR	A,ds:[PC80]
+ 3402  9F					lahf
+ 3403  46					inc	PC80
+ 3404  81 E6 3FFF				and	PC80,address_mask
+						fetch1
+ 3408  E9 CC75		     1			jmp	continue
+				M1	35H				;RST	6
+ = 0036			     1		op2	= 35H + 1
+						RST	30H
+ 3500  83 C5 02		     1			add	SP80,2
+ 3503  83 E5 0F		     1			and	SP80,stack_mask
+ 3506  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 350B  BE 0030		     1			mov	PC80,30H
+ 350E  E9 CB6F		     2			jmp	continue
+				M1	36H				;MVI	L,nn
+ = 0037			     1		op2	= 36H + 1
+						MVI	L
+ 3600  8A 1C		     1			mov	L,ds:[PC80]
+ 3602  46		     1			inc	PC80
+ 3603  81 E6 3FFF	     1			and	PC80,address_mask
+ 3607  E9 CA76		     2			jmp	continue
+				M1	37H				;RET
+ = 0038			     1		op2	= 37H + 1
+						RET80
+ 3700  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 3705  83 ED 02		     1			sub	SP80,2
+ 3708  83 E5 0F		     1			and	SP80,stack_mask
+ 370B  E9 C972		     2			jmp	continue
+				;--------------------------------------
+				M1	3BH				;RPE
+ 3800  8B 0E 4000	     2			mov	temp,reg_w
+ 3804  BF 00FC		     2			mov	di,code_undef1
+ 3807  CB		     2			retf
+ = 0039			     2			op2	= op2 + 1
+ 3900  8B 0E 4000	     2			mov	temp,reg_w
+ 3904  BF 00FC		     2			mov	di,code_undef1
+ 3907  CB		     2			retf
+ = 003A			     2			op2	= op2 + 1
+ 3A00  8B 0E 4000	     2			mov	temp,reg_w
+ 3A04  BF 00FC		     2			mov	di,code_undef1
+ 3A07  CB		     2			retf
+ = 003B			     2			op2	= op2 + 1
+ = 003C			     1		op2	= 3BH + 1
+						RET80	PE
+ 3B00  9E		     1			sahf
+ 3B01  7A 03		     1			jPE	@f
+ 3B03  E9 C57A		     2			jmp	continue
+ 3B06			     1	@@:
+ 3B06  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 3B0B  83 ED 02		     1			sub	SP80,2
+ 3B0E  83 E5 0F		     1			and	SP80,stack_mask
+ 3B11  E9 C56C		     2			jmp	continue
+				M1	3CH				;CPI	nn
+ = 003D			     1		op2	= 3CH + 1
+ 3C00  3A 04					CMP	A,ds:[PC80]
+ 3C02  9F					lahf
+ 3C03  46					inc	PC80
+ 3C04  81 E6 3FFF				and	PC80,address_mask
+						fetch1
+ 3C08  E9 C475		     1			jmp	continue
+				M1	3DH				;RST	7
+ = 003E			     1		op2	= 3DH + 1
+						RST	38h
+ 3D00  83 C5 02		     1			add	SP80,2
+ 3D03  83 E5 0F		     1			and	SP80,stack_mask
+ 3D06  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 3D0B  BE 0038		     1			mov	PC80,38h
+ 3D0E  E9 C36F		     2			jmp	continue
+				M1	3EH				;MVI	M,nn
+ = 003F			     1		op2	= 3EH + 1
+						MVI	M
+ 3E00  8B FB		     1			mov	di,HL
+ 3E02  81 E7 3FFF	     1			and	di,address_mask
+ 3E06  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 3E08  88 2D		     1			mov	M,temp_h
+ 3E0A  46		     1			inc	PC80
+ 3E0B  81 E6 3FFF	     1			and	PC80,address_mask
+ 3E0F  E9 C26E		     2			jmp	continue
+				M1	3FH				;RET
+ = 0040			     1		op2	= 3FH + 1
+						RET80
+ 3F00  3E: 8B B6 4004	     1			mov	PC80,ds:[SP80+stack_area]
+ 3F05  83 ED 02		     1			sub	SP80,2
+ 3F08  83 E5 0F		     1			and	SP80,stack_mask
+ 3F0B  E9 C172		     2			jmp	continue
+				;--------------------------------------
+				M1	40H
+ = 0041			     1		op2	= 40H + 1
+						JP80	NC
+ 4000  9E		     1			sahf
+ 4001  73 0A		     1			jNC	@f
+ 4003  83 C6 02		     1			add	PC80,2
+ 4006  81 E6 3FFF	     1			and	PC80,address_mask
+ 400A  E9 C073		     2			jmp	continue
+ 400D			     1	@@:
+ 400D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 400F  46		     1			inc	PC80
+ 4010  81 E6 3FFF	     1			and	PC80,address_mask
+ 4014  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 4016  8B F1		     1			mov	PC80,temp
+ 4018  B1 00		     1			mov	temp_l,0
+ 401A  E9 C063		     2			jmp	continue
+				M1	41H
+ = 0042			     1		op2	= 41H + 1
+						IN08	0
+ 4100  8B 0E 4000	     1			mov	temp,reg_w
+ 4104  BF 0000		     1			mov	di,0
+ 4107  CB		     1			retf
+				M1	42H
+ = 0043			     1		op2	= 42H + 1
+						CALL80	NC
+ 4200  9E		     1			sahf
+ 4201  73 0A		     1			jNC	@f
+ 4203  83 C6 02		     1			add	PC80,2
+ 4206  81 E6 3FFF	     1			and	PC80,address_mask
+ 420A  E9 BE73		     2			jmp	continue
+ 420D			     1	@@:
+ 420D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 420F  46		     1			inc	PC80
+ 4210  81 E6 3FFF	     1			and	PC80,address_mask
+ 4214  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 4216  46		     1			inc	PC80
+ 4217  81 E6 3FFF	     1			and	PC80,address_mask
+ 421B  83 C5 02		     1			add	SP80,2
+ 421E  83 E5 0F		     1			and	SP80,stack_mask
+ 4221  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 4226  8B F1		     1			mov	PC80,temp
+ 4228  B1 00		     1			mov	temp_l,0
+ 422A  E9 BE53		     2			jmp	continue
+				M1	43H
+ = 0044			     1		op2	= 43H + 1
+						IN08	1
+ 4300  8B 0E 4000	     1			mov	temp,reg_w
+ 4304  BF 0001		     1			mov	di,1
+ 4307  CB		     1			retf
+				M1	44H
+ = 0045			     1		op2	= 44H + 1
+						JP80
+ 4400  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 4402  46		     1			inc	PC80
+ 4403  81 E6 3FFF	     1			and	PC80,address_mask
+ 4407  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 4409  8B F1		     1			mov	PC80,temp
+ 440B  B1 00		     1			mov	temp_l,0
+ 440D  E9 BC70		     2			jmp	continue
+				M1	45H
+ = 0046			     1		op2	= 45H + 1
+						IN08	2
+ 4500  8B 0E 4000	     1			mov	temp,reg_w
+ 4504  BF 0002		     1			mov	di,2
+ 4507  CB		     1			retf
+				M1	46H
+ = 0047			     1		op2	= 46H + 1
+						CALL80
+ 4600  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 4602  46		     1			inc	PC80
+ 4603  81 E6 3FFF	     1			and	PC80,address_mask
+ 4607  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 4609  46		     1			inc	PC80
+ 460A  81 E6 3FFF	     1			and	PC80,address_mask
+ 460E  83 C5 02		     1			add	SP80,2
+ 4611  83 E5 0F		     1			and	SP80,stack_mask
+ 4614  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 4619  8B F1		     1			mov	PC80,temp
+ 461B  B1 00		     1			mov	temp_l,0
+ 461D  E9 BA60		     2			jmp	continue
+				M1	47H
+ = 0048			     1		op2	= 47H + 1
+						IN08	3
+ 4700  8B 0E 4000	     1			mov	temp,reg_w
+ 4704  BF 0003		     1			mov	di,3
+ 4707  CB		     1			retf
+				;--------------------------
+				M1	48H
+ = 0049			     1		op2	= 48H + 1
+						JP80	NZ
+ 4800  9E		     1			sahf
+ 4801  75 0A		     1			jNZ	@f
+ 4803  83 C6 02		     1			add	PC80,2
+ 4806  81 E6 3FFF	     1			and	PC80,address_mask
+ 480A  E9 B873		     2			jmp	continue
+ 480D			     1	@@:
+ 480D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 480F  46		     1			inc	PC80
+ 4810  81 E6 3FFF	     1			and	PC80,address_mask
+ 4814  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 4816  8B F1		     1			mov	PC80,temp
+ 4818  B1 00		     1			mov	temp_l,0
+ 481A  E9 B863		     2			jmp	continue
+				M1	49H
+ = 004A			     1		op2	= 49H + 1
+						IN08	4
+ 4900  8B 0E 4000	     1			mov	temp,reg_w
+ 4904  BF 0004		     1			mov	di,4
+ 4907  CB		     1			retf
+				M1	4AH
+ = 004B			     1		op2	= 4AH + 1
+						CALL80	NZ
+ 4A00  9E		     1			sahf
+ 4A01  75 0A		     1			jNZ	@f
+ 4A03  83 C6 02		     1			add	PC80,2
+ 4A06  81 E6 3FFF	     1			and	PC80,address_mask
+ 4A0A  E9 B673		     2			jmp	continue
+ 4A0D			     1	@@:
+ 4A0D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 4A0F  46		     1			inc	PC80
+ 4A10  81 E6 3FFF	     1			and	PC80,address_mask
+ 4A14  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 4A16  46		     1			inc	PC80
+ 4A17  81 E6 3FFF	     1			and	PC80,address_mask
+ 4A1B  83 C5 02		     1			add	SP80,2
+ 4A1E  83 E5 0F		     1			and	SP80,stack_mask
+ 4A21  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 4A26  8B F1		     1			mov	PC80,temp
+ 4A28  B1 00		     1			mov	temp_l,0
+ 4A2A  E9 B653		     2			jmp	continue
+				M1	4BH
+ = 004C			     1		op2	= 4BH + 1
+						IN08	5
+ 4B00  8B 0E 4000	     1			mov	temp,reg_w
+ 4B04  BF 0005		     1			mov	di,5
+ 4B07  CB		     1			retf
+				M1	4CH
+ = 004D			     1		op2	= 4CH + 1
+						JP80
+ 4C00  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 4C02  46		     1			inc	PC80
+ 4C03  81 E6 3FFF	     1			and	PC80,address_mask
+ 4C07  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 4C09  8B F1		     1			mov	PC80,temp
+ 4C0B  B1 00		     1			mov	temp_l,0
+ 4C0D  E9 B470		     2			jmp	continue
+				M1	4DH
+ = 004E			     1		op2	= 4DH + 1
+						IN08	6
+ 4D00  8B 0E 4000	     1			mov	temp,reg_w
+ 4D04  BF 0006		     1			mov	di,6
+ 4D07  CB		     1			retf
+				M1	4EH
+ = 004F			     1		op2	= 4EH + 1
+						CALL80
+ 4E00  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 4E02  46		     1			inc	PC80
+ 4E03  81 E6 3FFF	     1			and	PC80,address_mask
+ 4E07  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 4E09  46		     1			inc	PC80
+ 4E0A  81 E6 3FFF	     1			and	PC80,address_mask
+ 4E0E  83 C5 02		     1			add	SP80,2
+ 4E11  83 E5 0F		     1			and	SP80,stack_mask
+ 4E14  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 4E19  8B F1		     1			mov	PC80,temp
+ 4E1B  B1 00		     1			mov	temp_l,0
+ 4E1D  E9 B260		     2			jmp	continue
+				M1	4FH
+ = 0050			     1		op2	= 4FH + 1
+						IN08	7
+ 4F00  8B 0E 4000	     1			mov	temp,reg_w
+ 4F04  BF 0007		     1			mov	di,7
+ 4F07  CB		     1			retf
+				;--------------------------
+				M1	50H
+ = 0051			     1		op2	= 50H + 1
+						JP80	NS
+ 5000  9E		     1			sahf
+ 5001  79 0A		     1			jNS	@f
+ 5003  83 C6 02		     1			add	PC80,2
+ 5006  81 E6 3FFF	     1			and	PC80,address_mask
+ 500A  E9 B073		     2			jmp	continue
+ 500D			     1	@@:
+ 500D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 500F  46		     1			inc	PC80
+ 5010  81 E6 3FFF	     1			and	PC80,address_mask
+ 5014  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 5016  8B F1		     1			mov	PC80,temp
+ 5018  B1 00		     1			mov	temp_l,0
+ 501A  E9 B063		     2			jmp	continue
+				M1	51H
+ = 0052			     1		op2	= 51H + 1
+						OUT08	8
+ 5100  8B 0E 4000	     1			mov	temp,reg_w
+ 5104  BF 0008		     1			mov	di,8
+ 5107  CB		     1			retf
+				M1	52H
+ = 0053			     1		op2	= 52H + 1
+						CALL80	NS
+ 5200  9E		     1			sahf
+ 5201  79 0A		     1			jNS	@f
+ 5203  83 C6 02		     1			add	PC80,2
+ 5206  81 E6 3FFF	     1			and	PC80,address_mask
+ 520A  E9 AE73		     2			jmp	continue
+ 520D			     1	@@:
+ 520D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 520F  46		     1			inc	PC80
+ 5210  81 E6 3FFF	     1			and	PC80,address_mask
+ 5214  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 5216  46		     1			inc	PC80
+ 5217  81 E6 3FFF	     1			and	PC80,address_mask
+ 521B  83 C5 02		     1			add	SP80,2
+ 521E  83 E5 0F		     1			and	SP80,stack_mask
+ 5221  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 5226  8B F1		     1			mov	PC80,temp
+ 5228  B1 00		     1			mov	temp_l,0
+ 522A  E9 AE53		     2			jmp	continue
+				M1	53H
+ = 0054			     1		op2	= 53H + 1
+						OUT08	9
+ 5300  8B 0E 4000	     1			mov	temp,reg_w
+ 5304  BF 0009		     1			mov	di,9
+ 5307  CB		     1			retf
+				M1	54H
+ = 0055			     1		op2	= 54H + 1
+						JP80
+ 5400  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 5402  46		     1			inc	PC80
+ 5403  81 E6 3FFF	     1			and	PC80,address_mask
+ 5407  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 5409  8B F1		     1			mov	PC80,temp
+ 540B  B1 00		     1			mov	temp_l,0
+ 540D  E9 AC70		     2			jmp	continue
+				M1	55H
+ = 0056			     1		op2	= 55H + 1
+						OUT08	0Ah
+ 5500  8B 0E 4000	     1			mov	temp,reg_w
+ 5504  BF 000A		     1			mov	di,0Ah
+ 5507  CB		     1			retf
+				M1	56H
+ = 0057			     1		op2	= 56H + 1
+						CALL80
+ 5600  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 5602  46		     1			inc	PC80
+ 5603  81 E6 3FFF	     1			and	PC80,address_mask
+ 5607  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 5609  46		     1			inc	PC80
+ 560A  81 E6 3FFF	     1			and	PC80,address_mask
+ 560E  83 C5 02		     1			add	SP80,2
+ 5611  83 E5 0F		     1			and	SP80,stack_mask
+ 5614  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 5619  8B F1		     1			mov	PC80,temp
+ 561B  B1 00		     1			mov	temp_l,0
+ 561D  E9 AA60		     2			jmp	continue
+				M1	57H
+ = 0058			     1		op2	= 57H + 1
+						OUT08	0Bh
+ 5700  8B 0E 4000	     1			mov	temp,reg_w
+ 5704  BF 000B		     1			mov	di,0Bh
+ 5707  CB		     1			retf
+				;--------------------------
+				M1	58H
+ = 0059			     1		op2	= 58H + 1
+						JP80	PO
+ 5800  9E		     1			sahf
+ 5801  7B 0A		     1			jPO	@f
+ 5803  83 C6 02		     1			add	PC80,2
+ 5806  81 E6 3FFF	     1			and	PC80,address_mask
+ 580A  E9 A873		     2			jmp	continue
+ 580D			     1	@@:
+ 580D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 580F  46		     1			inc	PC80
+ 5810  81 E6 3FFF	     1			and	PC80,address_mask
+ 5814  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 5816  8B F1		     1			mov	PC80,temp
+ 5818  B1 00		     1			mov	temp_l,0
+ 581A  E9 A863		     2			jmp	continue
+				M1	59H
+ = 005A			     1		op2	= 59H + 1
+						OUT08	0Ch
+ 5900  8B 0E 4000	     1			mov	temp,reg_w
+ 5904  BF 000C		     1			mov	di,0Ch
+ 5907  CB		     1			retf
+				M1	5AH
+ = 005B			     1		op2	= 5AH + 1
+						CALL80	PO
+ 5A00  9E		     1			sahf
+ 5A01  7B 0A		     1			jPO	@f
+ 5A03  83 C6 02		     1			add	PC80,2
+ 5A06  81 E6 3FFF	     1			and	PC80,address_mask
+ 5A0A  E9 A673		     2			jmp	continue
+ 5A0D			     1	@@:
+ 5A0D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 5A0F  46		     1			inc	PC80
+ 5A10  81 E6 3FFF	     1			and	PC80,address_mask
+ 5A14  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 5A16  46		     1			inc	PC80
+ 5A17  81 E6 3FFF	     1			and	PC80,address_mask
+ 5A1B  83 C5 02		     1			add	SP80,2
+ 5A1E  83 E5 0F		     1			and	SP80,stack_mask
+ 5A21  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 5A26  8B F1		     1			mov	PC80,temp
+ 5A28  B1 00		     1			mov	temp_l,0
+ 5A2A  E9 A653		     2			jmp	continue
+				M1	5BH
+ = 005C			     1		op2	= 5BH + 1
+						OUT08	0Dh
+ 5B00  8B 0E 4000	     1			mov	temp,reg_w
+ 5B04  BF 000D		     1			mov	di,0Dh
+ 5B07  CB		     1			retf
+				M1	5CH
+ = 005D			     1		op2	= 5CH + 1
+						JP80
+ 5C00  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 5C02  46		     1			inc	PC80
+ 5C03  81 E6 3FFF	     1			and	PC80,address_mask
+ 5C07  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 5C09  8B F1		     1			mov	PC80,temp
+ 5C0B  B1 00		     1			mov	temp_l,0
+ 5C0D  E9 A470		     2			jmp	continue
+				M1	5DH
+ = 005E			     1		op2	= 5DH + 1
+						OUT08	0Eh
+ 5D00  8B 0E 4000	     1			mov	temp,reg_w
+ 5D04  BF 000E		     1			mov	di,0Eh
+ 5D07  CB		     1			retf
+				M1	5EH
+ = 005F			     1		op2	= 5EH + 1
+						CALL80
+ 5E00  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 5E02  46		     1			inc	PC80
+ 5E03  81 E6 3FFF	     1			and	PC80,address_mask
+ 5E07  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 5E09  46		     1			inc	PC80
+ 5E0A  81 E6 3FFF	     1			and	PC80,address_mask
+ 5E0E  83 C5 02		     1			add	SP80,2
+ 5E11  83 E5 0F		     1			and	SP80,stack_mask
+ 5E14  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 5E19  8B F1		     1			mov	PC80,temp
+ 5E1B  B1 00		     1			mov	temp_l,0
+ 5E1D  E9 A260		     2			jmp	continue
+				M1	5FH
+ = 0060			     1		op2	= 5FH + 1
+						OUT08	0Fh
+ 5F00  8B 0E 4000	     1			mov	temp,reg_w
+ 5F04  BF 000F		     1			mov	di,0Fh
+ 5F07  CB		     1			retf
+				;--------------------------
+				M1	60H
+ = 0061			     1		op2	= 60H + 1
+						JP80	C
+ 6000  9E		     1			sahf
+ 6001  72 0A		     1			jC	@f
+ 6003  83 C6 02		     1			add	PC80,2
+ 6006  81 E6 3FFF	     1			and	PC80,address_mask
+ 600A  E9 A073		     2			jmp	continue
+ 600D			     1	@@:
+ 600D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 600F  46		     1			inc	PC80
+ 6010  81 E6 3FFF	     1			and	PC80,address_mask
+ 6014  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 6016  8B F1		     1			mov	PC80,temp
+ 6018  B1 00		     1			mov	temp_l,0
+ 601A  E9 A063		     2			jmp	continue
+				M1	61H
+ = 0062			     1		op2	= 61H + 1
+						OUT08	10h
+ 6100  8B 0E 4000	     1			mov	temp,reg_w
+ 6104  BF 0010		     1			mov	di,10h
+ 6107  CB		     1			retf
+				M1	62H
+ = 0063			     1		op2	= 62H + 1
+						CALL80	C
+ 6200  9E		     1			sahf
+ 6201  72 0A		     1			jC	@f
+ 6203  83 C6 02		     1			add	PC80,2
+ 6206  81 E6 3FFF	     1			and	PC80,address_mask
+ 620A  E9 9E73		     2			jmp	continue
+ 620D			     1	@@:
+ 620D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 620F  46		     1			inc	PC80
+ 6210  81 E6 3FFF	     1			and	PC80,address_mask
+ 6214  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 6216  46		     1			inc	PC80
+ 6217  81 E6 3FFF	     1			and	PC80,address_mask
+ 621B  83 C5 02		     1			add	SP80,2
+ 621E  83 E5 0F		     1			and	SP80,stack_mask
+ 6221  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 6226  8B F1		     1			mov	PC80,temp
+ 6228  B1 00		     1			mov	temp_l,0
+ 622A  E9 9E53		     2			jmp	continue
+				M1	63H
+ = 0064			     1		op2	= 63H + 1
+						OUT08	11h
+ 6300  8B 0E 4000	     1			mov	temp,reg_w
+ 6304  BF 0011		     1			mov	di,11h
+ 6307  CB		     1			retf
+				M1	64H
+ = 0065			     1		op2	= 64H + 1
+						JP80
+ 6400  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 6402  46		     1			inc	PC80
+ 6403  81 E6 3FFF	     1			and	PC80,address_mask
+ 6407  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 6409  8B F1		     1			mov	PC80,temp
+ 640B  B1 00		     1			mov	temp_l,0
+ 640D  E9 9C70		     2			jmp	continue
+				M1	65H
+ = 0066			     1		op2	= 65H + 1
+						OUT08	12h
+ 6500  8B 0E 4000	     1			mov	temp,reg_w
+ 6504  BF 0012		     1			mov	di,12h
+ 6507  CB		     1			retf
+				M1	66H
+ = 0067			     1		op2	= 66H + 1
+						CALL80
+ 6600  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 6602  46		     1			inc	PC80
+ 6603  81 E6 3FFF	     1			and	PC80,address_mask
+ 6607  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 6609  46		     1			inc	PC80
+ 660A  81 E6 3FFF	     1			and	PC80,address_mask
+ 660E  83 C5 02		     1			add	SP80,2
+ 6611  83 E5 0F		     1			and	SP80,stack_mask
+ 6614  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 6619  8B F1		     1			mov	PC80,temp
+ 661B  B1 00		     1			mov	temp_l,0
+ 661D  E9 9A60		     2			jmp	continue
+				M1	67H
+ = 0068			     1		op2	= 67H + 1
+						OUT08	13h
+ 6700  8B 0E 4000	     1			mov	temp,reg_w
+ 6704  BF 0013		     1			mov	di,13h
+ 6707  CB		     1			retf
+				;--------------------------
+				M1	68H
+ = 0069			     1		op2	= 68H + 1
+						JP80	Z
+ 6800  9E		     1			sahf
+ 6801  74 0A		     1			jZ	@f
+ 6803  83 C6 02		     1			add	PC80,2
+ 6806  81 E6 3FFF	     1			and	PC80,address_mask
+ 680A  E9 9873		     2			jmp	continue
+ 680D			     1	@@:
+ 680D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 680F  46		     1			inc	PC80
+ 6810  81 E6 3FFF	     1			and	PC80,address_mask
+ 6814  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 6816  8B F1		     1			mov	PC80,temp
+ 6818  B1 00		     1			mov	temp_l,0
+ 681A  E9 9863		     2			jmp	continue
+				M1	69H
+ = 006A			     1		op2	= 69H + 1
+						OUT08	14h
+ 6900  8B 0E 4000	     1			mov	temp,reg_w
+ 6904  BF 0014		     1			mov	di,14h
+ 6907  CB		     1			retf
+				M1	6AH
+ = 006B			     1		op2	= 6AH + 1
+						CALL80	Z
+ 6A00  9E		     1			sahf
+ 6A01  74 0A		     1			jZ	@f
+ 6A03  83 C6 02		     1			add	PC80,2
+ 6A06  81 E6 3FFF	     1			and	PC80,address_mask
+ 6A0A  E9 9673		     2			jmp	continue
+ 6A0D			     1	@@:
+ 6A0D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 6A0F  46		     1			inc	PC80
+ 6A10  81 E6 3FFF	     1			and	PC80,address_mask
+ 6A14  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 6A16  46		     1			inc	PC80
+ 6A17  81 E6 3FFF	     1			and	PC80,address_mask
+ 6A1B  83 C5 02		     1			add	SP80,2
+ 6A1E  83 E5 0F		     1			and	SP80,stack_mask
+ 6A21  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 6A26  8B F1		     1			mov	PC80,temp
+ 6A28  B1 00		     1			mov	temp_l,0
+ 6A2A  E9 9653		     2			jmp	continue
+				M1	6BH
+ = 006C			     1		op2	= 6BH + 1
+						OUT08	15h
+ 6B00  8B 0E 4000	     1			mov	temp,reg_w
+ 6B04  BF 0015		     1			mov	di,15h
+ 6B07  CB		     1			retf
+				M1	6CH
+ = 006D			     1		op2	= 6CH + 1
+						JP80
+ 6C00  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 6C02  46		     1			inc	PC80
+ 6C03  81 E6 3FFF	     1			and	PC80,address_mask
+ 6C07  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 6C09  8B F1		     1			mov	PC80,temp
+ 6C0B  B1 00		     1			mov	temp_l,0
+ 6C0D  E9 9470		     2			jmp	continue
+				M1	6DH
+ = 006E			     1		op2	= 6DH + 1
+						OUT08	16h
+ 6D00  8B 0E 4000	     1			mov	temp,reg_w
+ 6D04  BF 0016		     1			mov	di,16h
+ 6D07  CB		     1			retf
+				M1	6EH
+ = 006F			     1		op2	= 6EH + 1
+						CALL80
+ 6E00  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 6E02  46		     1			inc	PC80
+ 6E03  81 E6 3FFF	     1			and	PC80,address_mask
+ 6E07  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 6E09  46		     1			inc	PC80
+ 6E0A  81 E6 3FFF	     1			and	PC80,address_mask
+ 6E0E  83 C5 02		     1			add	SP80,2
+ 6E11  83 E5 0F		     1			and	SP80,stack_mask
+ 6E14  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 6E19  8B F1		     1			mov	PC80,temp
+ 6E1B  B1 00		     1			mov	temp_l,0
+ 6E1D  E9 9260		     2			jmp	continue
+				M1	6FH
+ = 0070			     1		op2	= 6FH + 1
+						OUT08	17h
+ 6F00  8B 0E 4000	     1			mov	temp,reg_w
+ 6F04  BF 0017		     1			mov	di,17h
+ 6F07  CB		     1			retf
+				;--------------------------
+				M1	70H
+ = 0071			     1		op2	= 70H + 1
+						JP80	S
+ 7000  9E		     1			sahf
+ 7001  78 0A		     1			jS	@f
+ 7003  83 C6 02		     1			add	PC80,2
+ 7006  81 E6 3FFF	     1			and	PC80,address_mask
+ 700A  E9 9073		     2			jmp	continue
+ 700D			     1	@@:
+ 700D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 700F  46		     1			inc	PC80
+ 7010  81 E6 3FFF	     1			and	PC80,address_mask
+ 7014  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 7016  8B F1		     1			mov	PC80,temp
+ 7018  B1 00		     1			mov	temp_l,0
+ 701A  E9 9063		     2			jmp	continue
+				M1	71H
+ = 0072			     1		op2	= 71H + 1
+						OUT08	18h
+ 7100  8B 0E 4000	     1			mov	temp,reg_w
+ 7104  BF 0018		     1			mov	di,18h
+ 7107  CB		     1			retf
+				M1	72H
+ = 0073			     1		op2	= 72H + 1
+						CALL80	S
+ 7200  9E		     1			sahf
+ 7201  78 0A		     1			jS	@f
+ 7203  83 C6 02		     1			add	PC80,2
+ 7206  81 E6 3FFF	     1			and	PC80,address_mask
+ 720A  E9 8E73		     2			jmp	continue
+ 720D			     1	@@:
+ 720D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 720F  46		     1			inc	PC80
+ 7210  81 E6 3FFF	     1			and	PC80,address_mask
+ 7214  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 7216  46		     1			inc	PC80
+ 7217  81 E6 3FFF	     1			and	PC80,address_mask
+ 721B  83 C5 02		     1			add	SP80,2
+ 721E  83 E5 0F		     1			and	SP80,stack_mask
+ 7221  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 7226  8B F1		     1			mov	PC80,temp
+ 7228  B1 00		     1			mov	temp_l,0
+ 722A  E9 8E53		     2			jmp	continue
+				M1	73H
+ = 0074			     1		op2	= 73H + 1
+						OUT08	19h
+ 7300  8B 0E 4000	     1			mov	temp,reg_w
+ 7304  BF 0019		     1			mov	di,19h
+ 7307  CB		     1			retf
+				M1	74H
+ = 0075			     1		op2	= 74H + 1
+						JP80
+ 7400  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 7402  46		     1			inc	PC80
+ 7403  81 E6 3FFF	     1			and	PC80,address_mask
+ 7407  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 7409  8B F1		     1			mov	PC80,temp
+ 740B  B1 00		     1			mov	temp_l,0
+ 740D  E9 8C70		     2			jmp	continue
+				M1	75H
+ = 0076			     1		op2	= 75H + 1
+						OUT08	1Ah
+ 7500  8B 0E 4000	     1			mov	temp,reg_w
+ 7504  BF 001A		     1			mov	di,1Ah
+ 7507  CB		     1			retf
+				M1	76h
+ = 0077			     1		op2	= 76h + 1
+						CALL80
+ 7600  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 7602  46		     1			inc	PC80
+ 7603  81 E6 3FFF	     1			and	PC80,address_mask
+ 7607  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 7609  46		     1			inc	PC80
+ 760A  81 E6 3FFF	     1			and	PC80,address_mask
+ 760E  83 C5 02		     1			add	SP80,2
+ 7611  83 E5 0F		     1			and	SP80,stack_mask
+ 7614  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 7619  8B F1		     1			mov	PC80,temp
+ 761B  B1 00		     1			mov	temp_l,0
+ 761D  E9 8A60		     2			jmp	continue
+				M1	77H
+ = 0078			     1		op2	= 77H + 1
+						OUT08	1BH
+ 7700  8B 0E 4000	     1			mov	temp,reg_w
+ 7704  BF 001B		     1			mov	di,1BH
+ 7707  CB		     1			retf
+				;--------------------------
+				M1	78H
+ = 0079			     1		op2	= 78H + 1
+						JP80	PE
+ 7800  9E		     1			sahf
+ 7801  7A 0A		     1			jPE	@f
+ 7803  83 C6 02		     1			add	PC80,2
+ 7806  81 E6 3FFF	     1			and	PC80,address_mask
+ 780A  E9 8873		     2			jmp	continue
+ 780D			     1	@@:
+ 780D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 780F  46		     1			inc	PC80
+ 7810  81 E6 3FFF	     1			and	PC80,address_mask
+ 7814  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 7816  8B F1		     1			mov	PC80,temp
+ 7818  B1 00		     1			mov	temp_l,0
+ 781A  E9 8863		     2			jmp	continue
+				M1	79H
+ = 007A			     1		op2	= 79H + 1
+						OUT08	1Ch
+ 7900  8B 0E 4000	     1			mov	temp,reg_w
+ 7904  BF 001C		     1			mov	di,1Ch
+ 7907  CB		     1			retf
+				M1	7AH
+ = 007B			     1		op2	= 7AH + 1
+						CALL80	PE
+ 7A00  9E		     1			sahf
+ 7A01  7A 0A		     1			jPE	@f
+ 7A03  83 C6 02		     1			add	PC80,2
+ 7A06  81 E6 3FFF	     1			and	PC80,address_mask
+ 7A0A  E9 8673		     2			jmp	continue
+ 7A0D			     1	@@:
+ 7A0D  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 7A0F  46		     1			inc	PC80
+ 7A10  81 E6 3FFF	     1			and	PC80,address_mask
+ 7A14  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 7A16  46		     1			inc	PC80
+ 7A17  81 E6 3FFF	     1			and	PC80,address_mask
+ 7A1B  83 C5 02		     1			add	SP80,2
+ 7A1E  83 E5 0F		     1			and	SP80,stack_mask
+ 7A21  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 7A26  8B F1		     1			mov	PC80,temp
+ 7A28  B1 00		     1			mov	temp_l,0
+ 7A2A  E9 8653		     2			jmp	continue
+				M1	7BH
+ = 007C			     1		op2	= 7BH + 1
+						OUT08	1Dh
+ 7B00  8B 0E 4000	     1			mov	temp,reg_w
+ 7B04  BF 001D		     1			mov	di,1Dh
+ 7B07  CB		     1			retf
+				M1	7CH
+ = 007D			     1		op2	= 7CH + 1
+						JP80
+ 7C00  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 7C02  46		     1			inc	PC80
+ 7C03  81 E6 3FFF	     1			and	PC80,address_mask
+ 7C07  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 7C09  8B F1		     1			mov	PC80,temp
+ 7C0B  B1 00		     1			mov	temp_l,0
+ 7C0D  E9 8470		     2			jmp	continue
+				M1	7DH
+ = 007E			     1		op2	= 7DH + 1
+						OUT08	1Eh
+ 7D00  8B 0E 4000	     1			mov	temp,reg_w
+ 7D04  BF 001E		     1			mov	di,1Eh
+ 7D07  CB		     1			retf
+				M1	7EH
+ = 007F			     1		op2	= 7EH + 1
+						CALL80
+ 7E00  8A 0C		     1			mov	temp_l,ds:[PC80]
+ 7E02  46		     1			inc	PC80
+ 7E03  81 E6 3FFF	     1			and	PC80,address_mask
+ 7E07  8A 2C		     1			mov	temp_h,ds:[PC80]
+ 7E09  46		     1			inc	PC80
+ 7E0A  81 E6 3FFF	     1			and	PC80,address_mask
+ 7E0E  83 C5 02		     1			add	SP80,2
+ 7E11  83 E5 0F		     1			and	SP80,stack_mask
+ 7E14  3E: 89 B6 4004	     1			mov	ds:[SP80+stack_area],PC80
+ 7E19  8B F1		     1			mov	PC80,temp
+ 7E1B  B1 00		     1			mov	temp_l,0
+ 7E1D  E9 8260		     2			jmp	continue
+				M1	7FH
+ = 0080			     1		op2	= 7FH + 1
+						OUT08	1Fh
+ 7F00  8B 0E 4000	     1			mov	temp,reg_w
+ 7F04  BF 001F		     1			mov	di,1Fh
+ 7F07  CB		     1			retf
+				;--------------------------
+				M1	80H
+ = 0081			     1		op2	= 80H + 1
+						ADD8	A
+ 8000  02 C0		     1			add	A,A
+ 8002  9F		     1			lahf
+ 8003  E9 807A		     2			jmp	continue
+				M1	81H
+ = 0082			     1		op2	= 81H + 1
+						ADD8	B
+ 8100  02 06 4001	     1			add	A,B
+ 8104  9F		     1			lahf
+ 8105  E9 7F78		     2			jmp	continue
+				M1	82H
+ = 0083			     1		op2	= 82H + 1
+						ADD8	C_reg
+ 8200  02 06 4000	     1			add	A,C_reg
+ 8204  9F		     1			lahf
+ 8205  E9 7E78		     2			jmp	continue
+				M1	83H
+ = 0084			     1		op2	= 83H + 1
+						ADD8	D
+ 8300  02 C6		     1			add	A,D
+ 8302  9F		     1			lahf
+ 8303  E9 7D7A		     2			jmp	continue
+				M1	84H
+ = 0085			     1		op2	= 84H + 1
+						ADD8	E
+ 8400  02 C2		     1			add	A,E
+ 8402  9F		     1			lahf
+ 8403  E9 7C7A		     2			jmp	continue
+				M1	85H
+ = 0086			     1		op2	= 85H + 1
+						ADD8	H
+ 8500  02 C7		     1			add	A,H
+ 8502  9F		     1			lahf
+ 8503  E9 7B7A		     2			jmp	continue
+				M1	86H
+ = 0087			     1		op2	= 86H + 1
+						ADD8	L
+ 8600  02 C3		     1			add	A,L
+ 8602  9F		     1			lahf
+ 8603  E9 7A7A		     2			jmp	continue
+				M1	87H
+ = 0088			     1		op2	= 87H + 1
+						ADD8	M
+ 8700  8B FB		     1			mov	di,HL
+ 8702  81 E7 3FFF	     1			and	di,address_mask
+ 8706  02 05		     1			add	A,M
+ 8708  9F		     1			lahf
+ 8709  E9 7974		     2			jmp	continue
+				;--------------------------
+				M1	88H
+ = 0089			     1		op2	= 88H + 1
+						ADC8	A
+ 8800  9E		     1			sahf
+ 8801  12 C0		     1			adc	A,A
+ 8803  9F		     1			lahf
+ 8804  E9 7879		     2			jmp	continue
+				M1	89H
+ = 008A			     1		op2	= 89H + 1
+						ADC8	B
+ 8900  9E		     1			sahf
+ 8901  12 06 4001	     1			adc	A,B
+ 8905  9F		     1			lahf
+ 8906  E9 7777		     2			jmp	continue
+				M1	8AH
+ = 008B			     1		op2	= 8AH + 1
+						ADC8	C_reg
+ 8A00  9E		     1			sahf
+ 8A01  12 06 4000	     1			adc	A,C_reg
+ 8A05  9F		     1			lahf
+ 8A06  E9 7677		     2			jmp	continue
+				M1	8BH
+ = 008C			     1		op2	= 8BH + 1
+						ADC8	D
+ 8B00  9E		     1			sahf
+ 8B01  12 C6		     1			adc	A,D
+ 8B03  9F		     1			lahf
+ 8B04  E9 7579		     2			jmp	continue
+				M1	8CH
+ = 008D			     1		op2	= 8CH + 1
+						ADC8	E
+ 8C00  9E		     1			sahf
+ 8C01  12 C2		     1			adc	A,E
+ 8C03  9F		     1			lahf
+ 8C04  E9 7479		     2			jmp	continue
+				M1	8DH
+ = 008E			     1		op2	= 8DH + 1
+						ADC8	H
+ 8D00  9E		     1			sahf
+ 8D01  12 C7		     1			adc	A,H
+ 8D03  9F		     1			lahf
+ 8D04  E9 7379		     2			jmp	continue
+				M1	8EH
+ = 008F			     1		op2	= 8EH + 1
+						ADC8	L
+ 8E00  9E		     1			sahf
+ 8E01  12 C3		     1			adc	A,L
+ 8E03  9F		     1			lahf
+ 8E04  E9 7279		     2			jmp	continue
+				M1	8FH
+ = 0090			     1		op2	= 8FH + 1
+						ADC8	M
+ 8F00  8B FB		     1			mov	di,HL
+ 8F02  81 E7 3FFF	     1			and	di,address_mask
+ 8F06  9E		     1			sahf
+ 8F07  12 05		     1			adc	A,M
+ 8F09  9F		     1			lahf
+ 8F0A  E9 7173		     2			jmp	continue
+				;--------------------------
+				M1	90H
+ = 0091			     1		op2	= 90H + 1
+						SUB8	A
+ 9000  2A C0		     1			sub	A,A
+ 9002  9F		     1			lahf
+ 9003  E9 707A		     2			jmp	continue
+				M1	91H
+ = 0092			     1		op2	= 91H + 1
+						SUB8	B
+ 9100  2A 06 4001	     1			sub	A,B
+ 9104  9F		     1			lahf
+ 9105  E9 6F78		     2			jmp	continue
+				M1	92H
+ = 0093			     1		op2	= 92H + 1
+						SUB8	C_reg
+ 9200  2A 06 4000	     1			sub	A,C_reg
+ 9204  9F		     1			lahf
+ 9205  E9 6E78		     2			jmp	continue
+				M1	93H
+ = 0094			     1		op2	= 93H + 1
+						SUB8	D
+ 9300  2A C6		     1			sub	A,D
+ 9302  9F		     1			lahf
+ 9303  E9 6D7A		     2			jmp	continue
+				M1	94H
+ = 0095			     1		op2	= 94H + 1
+						SUB8	E
+ 9400  2A C2		     1			sub	A,E
+ 9402  9F		     1			lahf
+ 9403  E9 6C7A		     2			jmp	continue
+				M1	95H
+ = 0096			     1		op2	= 95H + 1
+						SUB8	H
+ 9500  2A C7		     1			sub	A,H
+ 9502  9F		     1			lahf
+ 9503  E9 6B7A		     2			jmp	continue
+				M1	96H
+ = 0097			     1		op2	= 96H + 1
+						SUB8	L
+ 9600  2A C3		     1			sub	A,L
+ 9602  9F		     1			lahf
+ 9603  E9 6A7A		     2			jmp	continue
+				M1	97H
+ = 0098			     1		op2	= 97H + 1
+						SUB8	M
+ 9700  8B FB		     1			mov	di,HL
+ 9702  81 E7 3FFF	     1			and	di,address_mask
+ 9706  2A 05		     1			sub	A,M
+ 9708  9F		     1			lahf
+ 9709  E9 6974		     2			jmp	continue
+				;--------------------------
+				M1	98H
+ = 0099			     1		op2	= 98H + 1
+						SBC8	A
+ 9800  9E		     1			sahf
+ 9801  1A C0		     1			sbb	A,A
+ 9803  9F		     1			lahf
+ 9804  E9 6879		     2			jmp	continue
+				M1	99H
+ = 009A			     1		op2	= 99H + 1
+						SBC8	B
+ 9900  9E		     1			sahf
+ 9901  1A 06 4001	     1			sbb	A,B
+ 9905  9F		     1			lahf
+ 9906  E9 6777		     2			jmp	continue
+				M1	9AH
+ = 009B			     1		op2	= 9AH + 1
+						SBC8	C_reg
+ 9A00  9E		     1			sahf
+ 9A01  1A 06 4000	     1			sbb	A,C_reg
+ 9A05  9F		     1			lahf
+ 9A06  E9 6677		     2			jmp	continue
+				M1	9BH
+ = 009C			     1		op2	= 9BH + 1
+						SBC8	D
+ 9B00  9E		     1			sahf
+ 9B01  1A C6		     1			sbb	A,D
+ 9B03  9F		     1			lahf
+ 9B04  E9 6579		     2			jmp	continue
+				M1	9CH
+ = 009D			     1		op2	= 9CH + 1
+						SBC8	E
+ 9C00  9E		     1			sahf
+ 9C01  1A C2		     1			sbb	A,E
+ 9C03  9F		     1			lahf
+ 9C04  E9 6479		     2			jmp	continue
+				M1	9DH
+ = 009E			     1		op2	= 9DH + 1
+						SBC8	H
+ 9D00  9E		     1			sahf
+ 9D01  1A C7		     1			sbb	A,H
+ 9D03  9F		     1			lahf
+ 9D04  E9 6379		     2			jmp	continue
+				M1	9EH
+ = 009F			     1		op2	= 9EH + 1
+						SBC8	L
+ 9E00  9E		     1			sahf
+ 9E01  1A C3		     1			sbb	A,L
+ 9E03  9F		     1			lahf
+ 9E04  E9 6279		     2			jmp	continue
+				M1	9FH
+ = 00A0			     1		op2	= 9FH + 1
+						SBC8	M
+ 9F00  8B FB		     1			mov	di,HL
+ 9F02  81 E7 3FFF	     1			and	di,address_mask
+ 9F06  9E		     1			sahf
+ 9F07  1A 05		     1			sbb	A,M
+ 9F09  9F		     1			lahf
+ 9F0A  E9 6173		     2			jmp	continue
+				;--------------------------
+				M1	0A0H
+ = 00A1			     1		op2	= 0A0H + 1
+						ANA	A
+ A000  22 C0		     1			and	A,A
+ A002  9F		     1			lahf
+ A003  E9 607A		     2			jmp	continue
+				M1	0A1H
+ = 00A2			     1		op2	= 0A1H + 1
+						ANA	B
+ A100  22 06 4001	     1			and	A,B
+ A104  9F		     1			lahf
+ A105  E9 5F78		     2			jmp	continue
+				M1	0A2H
+ = 00A3			     1		op2	= 0A2H + 1
+						ANA	C_reg
+ A200  22 06 4000	     1			and	A,C_reg
+ A204  9F		     1			lahf
+ A205  E9 5E78		     2			jmp	continue
+				M1	0A3H
+ = 00A4			     1		op2	= 0A3H + 1
+						ANA	D
+ A300  22 C6		     1			and	A,D
+ A302  9F		     1			lahf
+ A303  E9 5D7A		     2			jmp	continue
+				M1	0A4H
+ = 00A5			     1		op2	= 0A4H + 1
+						ANA	E
+ A400  22 C2		     1			and	A,E
+ A402  9F		     1			lahf
+ A403  E9 5C7A		     2			jmp	continue
+				M1	0A5H
+ = 00A6			     1		op2	= 0A5H + 1
+						ANA	H
+ A500  22 C7		     1			and	A,H
+ A502  9F		     1			lahf
+ A503  E9 5B7A		     2			jmp	continue
+				M1	0A6H
+ = 00A7			     1		op2	= 0A6H + 1
+						ANA	L
+ A600  22 C3		     1			and	A,L
+ A602  9F		     1			lahf
+ A603  E9 5A7A		     2			jmp	continue
+				M1	0A7H
+ = 00A8			     1		op2	= 0A7H + 1
+						ANA	M
+ A700  8B FB		     1			mov	di,HL
+ A702  81 E7 3FFF	     1			and	di,address_mask
+ A706  22 05		     1			and	A,M
+ A708  9F		     1			lahf
+ A709  E9 5974		     2			jmp	continue
+				;--------------------------
+				M1	0A8H
+ = 00A9			     1		op2	= 0A8H + 1
+						XRA	A
+ A800  32 C0		     1			xor	A,A
+ A802  9F		     1			lahf
+ A803  E9 587A		     2			jmp	continue
+				M1	0A9H
+ = 00AA			     1		op2	= 0A9H + 1
+						XRA	B
+ A900  32 06 4001	     1			xor	A,B
+ A904  9F		     1			lahf
+ A905  E9 5778		     2			jmp	continue
+				M1	0AAH
+ = 00AB			     1		op2	= 0AAH + 1
+						XRA	C_reg
+ AA00  32 06 4000	     1			xor	A,C_reg
+ AA04  9F		     1			lahf
+ AA05  E9 5678		     2			jmp	continue
+				M1	0ABH
+ = 00AC			     1		op2	= 0ABH + 1
+						XRA	D
+ AB00  32 C6		     1			xor	A,D
+ AB02  9F		     1			lahf
+ AB03  E9 557A		     2			jmp	continue
+				M1	0ACH
+ = 00AD			     1		op2	= 0ACH + 1
+						XRA	E
+ AC00  32 C2		     1			xor	A,E
+ AC02  9F		     1			lahf
+ AC03  E9 547A		     2			jmp	continue
+				M1	0ADH
+ = 00AE			     1		op2	= 0ADH + 1
+						XRA	H
+ AD00  32 C7		     1			xor	A,H
+ AD02  9F		     1			lahf
+ AD03  E9 537A		     2			jmp	continue
+				M1	0AEH
+ = 00AF			     1		op2	= 0AEH + 1
+						XRA	L
+ AE00  32 C3		     1			xor	A,L
+ AE02  9F		     1			lahf
+ AE03  E9 527A		     2			jmp	continue
+				M1	0AFH
+ = 00B0			     1		op2	= 0AFH + 1
+						XRA	M
+ AF00  8B FB		     1			mov	di,HL
+ AF02  81 E7 3FFF	     1			and	di,address_mask
+ AF06  32 05		     1			xor	A,M
+ AF08  9F		     1			lahf
+ AF09  E9 5174		     2			jmp	continue
+				;--------------------------
+				M1	0B0H
+ = 00B1			     1		op2	= 0B0H + 1
+						ORA	A
+ B000  0A C0		     1			or	A,A
+ B002  9F		     1			lahf
+ B003  E9 507A		     2			jmp	continue
+				M1	0B1H
+ = 00B2			     1		op2	= 0B1H + 1
+						ORA	B
+ B100  0A 06 4001	     1			or	A,B
+ B104  9F		     1			lahf
+ B105  E9 4F78		     2			jmp	continue
+				M1	0B2H
+ = 00B3			     1		op2	= 0B2H + 1
+						ORA	C_reg
+ B200  0A 06 4000	     1			or	A,C_reg
+ B204  9F		     1			lahf
+ B205  E9 4E78		     2			jmp	continue
+				M1	0B3H
+ = 00B4			     1		op2	= 0B3H + 1
+						ORA	D
+ B300  0A C6		     1			or	A,D
+ B302  9F		     1			lahf
+ B303  E9 4D7A		     2			jmp	continue
+				M1	0B4H
+ = 00B5			     1		op2	= 0B4H + 1
+						ORA	E
+ B400  0A C2		     1			or	A,E
+ B402  9F		     1			lahf
+ B403  E9 4C7A		     2			jmp	continue
+				M1	0B5H
+ = 00B6			     1		op2	= 0B5H + 1
+						ORA	H
+ B500  0A C7		     1			or	A,H
+ B502  9F		     1			lahf
+ B503  E9 4B7A		     2			jmp	continue
+				M1	0B6H
+ = 00B7			     1		op2	= 0B6H + 1
+						ORA	L
+ B600  0A C3		     1			or	A,L
+ B602  9F		     1			lahf
+ B603  E9 4A7A		     2			jmp	continue
+				M1	0B7H
+ = 00B8			     1		op2	= 0B7H + 1
+						ORA	M
+ B700  8B FB		     1			mov	di,HL
+ B702  81 E7 3FFF	     1			and	di,address_mask
+ B706  0A 05		     1			or	A,M
+ B708  9F		     1			lahf
+ B709  E9 4974		     2			jmp	continue
+				;--------------------------
+				M1	0B8H
+ = 00B9			     1		op2	= 0B8H + 1
+						CPA	A
+ B800  3A C0		     1			cmp	A,A
+ B802  9F		     1			lahf
+ B803  E9 487A		     2			jmp	continue
+				M1	0B9H
+ = 00BA			     1		op2	= 0B9H + 1
+						CPA	B
+ B900  3A 06 4001	     1			cmp	A,B
+ B904  9F		     1			lahf
+ B905  E9 4778		     2			jmp	continue
+				M1	0BAH
+ = 00BB			     1		op2	= 0BAH + 1
+						CPA	C_reg
+ BA00  3A 06 4000	     1			cmp	A,C_reg
+ BA04  9F		     1			lahf
+ BA05  E9 4678		     2			jmp	continue
+				M1	0BBH
+ = 00BC			     1		op2	= 0BBH + 1
+						CPA	D
+ BB00  3A C6		     1			cmp	A,D
+ BB02  9F		     1			lahf
+ BB03  E9 457A		     2			jmp	continue
+				M1	0BCH
+ = 00BD			     1		op2	= 0BCH + 1
+						CPA	E
+ BC00  3A C2		     1			cmp	A,E
+ BC02  9F		     1			lahf
+ BC03  E9 447A		     2			jmp	continue
+				M1	0BDH
+ = 00BE			     1		op2	= 0BDH + 1
+						CPA	H
+ BD00  3A C7		     1			cmp	A,H
+ BD02  9F		     1			lahf
+ BD03  E9 437A		     2			jmp	continue
+				M1	0BEH
+ = 00BF			     1		op2	= 0BEH + 1
+						CPA	L
+ BE00  3A C3		     1			cmp	A,L
+ BE02  9F		     1			lahf
+ BE03  E9 427A		     2			jmp	continue
+				M1	0BFH
+ = 00C0			     1		op2	= 0BFH + 1
+						CPA	M
+ BF00  8B FB		     1			mov	di,HL
+ BF02  81 E7 3FFF	     1			and	di,address_mask
+ BF06  3A 05		     1			cmp	A,M
+ BF08  9F		     1			lahf
+ BF09  E9 4174		     2			jmp	continue
+				;--------------------------
+				M1	0C0H
+ = 00C1			     1		op2	= 0C0H + 1
+						LD	A,A
+ C000  E9 407D		     2			jmp	continue
+				M1	0C1H
+ = 00C2			     1		op2	= 0C1H + 1
+						LD	A,B
+ C100  A0 4001		     1				mov	A,B
+ C103  E9 3F7A		     2			jmp	continue
+				M1	0C2H
+ = 00C3			     1		op2	= 0C2H + 1
+						LD	A,C_reg
+ C200  A0 4000		     1				mov	A,C_reg
+ C203  E9 3E7A		     2			jmp	continue
+				M1	0C3H
+ = 00C4			     1		op2	= 0C3H + 1
+						LD	A,D
+ C300  8A C6		     1			mov	A,D
+ C302  E9 3D7B		     2			jmp	continue
+				M1	0C4H
+ = 00C5			     1		op2	= 0C4H + 1
+						LD	A,E
+ C400  8A C2		     1			mov	A,E
+ C402  E9 3C7B		     2			jmp	continue
+				M1	0C5H
+ = 00C6			     1		op2	= 0C5H + 1
+						LD	A,H
+ C500  8A C7		     1			mov	A,H
+ C502  E9 3B7B		     2			jmp	continue
+				M1	0C6H
+ = 00C7			     1		op2	= 0C6H + 1
+						LD	A,L
+ C600  8A C3		     1			mov	A,L
+ C602  E9 3A7B		     2			jmp	continue
+				M1	0C7H
+ = 00C8			     1		op2	= 0C7H + 1
+						LD	A,M
+ C700  8B FB		     1				mov	di,HL
+ C702  81 E7 3FFF	     1				and	di,address_mask
+ C706  8A 05		     1				mov	A,M
+ C708  E9 3975		     2			jmp	continue
+				;--------------------------
+				M1	0C8H
+ = 00C9			     1		op2	= 0C8H + 1
+						LD	B,A
+ C800  A2 4001		     1				mov	B,A
+ C803  E9 387A		     2			jmp	continue
+				M1	0C9H
+ = 00CA			     1		op2	= 0C9H + 1
+						LD	B,B
+ C900  E9 377D		     2			jmp	continue
+				M1	0CAH
+ = 00CB			     1		op2	= 0CAH + 1
+						LD	B,C_reg
+ CA00  8A 2E 4000	     1				mov	temp_h,C_reg
+ CA04  88 2E 4001	     1				mov	B,temp_h
+ CA08  E9 3675		     2			jmp	continue
+				M1	0CBH	
+ = 00CC			     1		op2	= 0CBH + 1
+						LD	B,D
+ CB00  88 36 4001	     1				mov	B,D
+ CB04  E9 3579		     2			jmp	continue
+				M1	0CCH
+ = 00CD			     1		op2	= 0CCH + 1
+						LD	B,E
+ CC00  88 16 4001	     1				mov	B,E
+ CC04  E9 3479		     2			jmp	continue
+				M1	0CDH
+ = 00CE			     1		op2	= 0CDH + 1
+						LD	B,H
+ CD00  88 3E 4001	     1				mov	B,H
+ CD04  E9 3379		     2			jmp	continue
+				M1	0CEH
+ = 00CF			     1		op2	= 0CEH + 1
+						LD	B,L
+ CE00  88 1E 4001	     1				mov	B,L
+ CE04  E9 3279		     2			jmp	continue
+				M1	0CFH
+ = 00D0			     1		op2	= 0CFH + 1
+						LD	B,M
+ CF00  8B FB		     1				mov	di,HL
+ CF02  81 E7 3FFF	     1				and	di,address_mask
+ CF06  8A 2D		     1				mov	temp_h,M
+ CF08  88 2E 4001	     1				mov	B,temp_h
+ CF0C  E9 3171		     2			jmp	continue
+				;--------------------------
+				M1	0D0H
+ = 00D1			     1		op2	= 0D0H + 1
+						LD	C_reg,A
+ D000  A2 4000		     1				mov	C_reg,A
+ D003  E9 307A		     2			jmp	continue
+				M1	0D1H
+ = 00D2			     1		op2	= 0D1H + 1
+						LD	C_reg,B
+ D100  8A 2E 4001	     1				mov	temp_h,B
+ D104  88 2E 4000	     1				mov	C_reg,temp_h
+ D108  E9 2F75		     2			jmp	continue
+				M1	0D2H
+ = 00D3			     1		op2	= 0D2H + 1
+						LD	C_reg,C_reg
+ D200  E9 2E7D		     2			jmp	continue
+				M1	0D3H
+ = 00D4			     1		op2	= 0D3H + 1
+						LD	C_reg,D
+ D300  88 36 4000	     1				mov	C_reg,D
+ D304  E9 2D79		     2			jmp	continue
+				M1	0D4H
+ = 00D5			     1		op2	= 0D4H + 1
+						LD	C_reg,E
+ D400  88 16 4000	     1				mov	C_reg,E
+ D404  E9 2C79		     2			jmp	continue
+				M1	0D5H
+ = 00D6			     1		op2	= 0D5H + 1
+						LD	C_reg,H
+ D500  88 3E 4000	     1				mov	C_reg,H
+ D504  E9 2B79		     2			jmp	continue
+				M1	0D6H
+ = 00D7			     1		op2	= 0D6H + 1
+						LD	C_reg,L
+ D600  88 1E 4000	     1				mov	C_reg,L
+ D604  E9 2A79		     2			jmp	continue
+				M1	0D7H
+ = 00D8			     1		op2	= 0D7H + 1
+						LD	C_reg,M
+ D700  8B FB		     1				mov	di,HL
+ D702  81 E7 3FFF	     1				and	di,address_mask
+ D706  8A 2D		     1				mov	temp_h,M
+ D708  88 2E 4000	     1				mov	C_reg,temp_h
+ D70C  E9 2971		     2			jmp	continue
+				;--------------------------
+				M1	0D8H
+ = 00D9			     1		op2	= 0D8H + 1
+						LD	D,A
+ D800  8A F0		     1			mov	D,A
+ D802  E9 287B		     2			jmp	continue
+				M1	0D9H
+ = 00DA			     1		op2	= 0D9H + 1
+						LD	D,B
+ D900  8A 36 4001	     1				mov	D,B
+ D904  E9 2779		     2			jmp	continue
+				M1	0DAH
+ = 00DB			     1		op2	= 0DAH + 1
+						LD	D,C_reg
+ DA00  8A 36 4000	     1				mov	D,C_reg
+ DA04  E9 2679		     2			jmp	continue
+				M1	0DBH
+ = 00DC			     1		op2	= 0DBH + 1
+						LD	D,D
+ DB00  E9 257D		     2			jmp	continue
+				M1	0DCH
+ = 00DD			     1		op2	= 0DCH + 1
+						LD	D,E
+ DC00  8A F2		     1			mov	D,E
+ DC02  E9 247B		     2			jmp	continue
+				M1	0DDH
+ = 00DE			     1		op2	= 0DDH + 1
+						LD	D,H
+ DD00  8A F7		     1			mov	D,H
+ DD02  E9 237B		     2			jmp	continue
+				M1	0DEH
+ = 00DF			     1		op2	= 0DEH + 1
+						LD	D,L
+ DE00  8A F3		     1			mov	D,L
+ DE02  E9 227B		     2			jmp	continue
+				M1	0DFH
+ = 00E0			     1		op2	= 0DFH + 1
+						LD	D,M
+ DF00  8B FB		     1				mov	di,HL
+ DF02  81 E7 3FFF	     1				and	di,address_mask
+ DF06  8A 35		     1				mov	D,M
+ DF08  E9 2175		     2			jmp	continue
+				;--------------------------
+				M1	0E0H
+ = 00E1			     1		op2	= 0E0H + 1
+						LD	E,A
+ E000  8A D0		     1			mov	E,A
+ E002  E9 207B		     2			jmp	continue
+				M1	0E1H
+ = 00E2			     1		op2	= 0E1H + 1
+						LD	E,B
+ E100  8A 16 4001	     1				mov	E,B
+ E104  E9 1F79		     2			jmp	continue
+				M1	0E2H
+ = 00E3			     1		op2	= 0E2H + 1
+						LD	E,C_reg
+ E200  8A 16 4000	     1				mov	E,C_reg
+ E204  E9 1E79		     2			jmp	continue
+				M1	0E3H
+ = 00E4			     1		op2	= 0E3H + 1
+						LD	E,D
+ E300  8A D6		     1			mov	E,D
+ E302  E9 1D7B		     2			jmp	continue
+				M1	0E4H
+ = 00E5			     1		op2	= 0E4H + 1
+						LD	E,E
+ E400  E9 1C7D		     2			jmp	continue
+				M1	0E5H
+ = 00E6			     1		op2	= 0E5H + 1
+						LD	E,H
+ E500  8A D7		     1			mov	E,H
+ E502  E9 1B7B		     2			jmp	continue
+				M1	0E6H
+ = 00E7			     1		op2	= 0E6H + 1
+						LD	E,L
+ E600  8A D3		     1			mov	E,L
+ E602  E9 1A7B		     2			jmp	continue
+				M1	0E7H
+ = 00E8			     1		op2	= 0E7H + 1
+						LD	E,M
+ E700  8B FB		     1				mov	di,HL
+ E702  81 E7 3FFF	     1				and	di,address_mask
+ E706  8A 15		     1				mov	E,M
+ E708  E9 1975		     2			jmp	continue
+				;-------------------------
+				M1	0E8H
+ = 00E9			     1		op2	= 0E8H + 1
+						LD	H,A
+ E800  8A F8		     1			mov	H,A
+ E802  E9 187B		     2			jmp	continue
+				M1	0E9H
+ = 00EA			     1		op2	= 0E9H + 1
+						LD	H,B
+ E900  8A 3E 4001	     1				mov	H,B
+ E904  E9 1779		     2			jmp	continue
+				M1	0EAH
+ = 00EB			     1		op2	= 0EAH + 1
+						LD	H,C_reg
+ EA00  8A 3E 4000	     1				mov	H,C_reg
+ EA04  E9 1679		     2			jmp	continue
+				M1	0EBH
+ = 00EC			     1		op2	= 0EBH + 1
+						LD	H,D
+ EB00  8A FE		     1			mov	H,D
+ EB02  E9 157B		     2			jmp	continue
+				M1	0ECH
+ = 00ED			     1		op2	= 0ECH + 1
+						LD	H,E
+ EC00  8A FA		     1			mov	H,E
+ EC02  E9 147B		     2			jmp	continue
+				M1	0EDH
+ = 00EE			     1		op2	= 0EDH + 1
+						LD	H,H
+ ED00  E9 137D		     2			jmp	continue
+				M1	0EEH
+ = 00EF			     1		op2	= 0EEH + 1
+						LD	H,L
+ EE00  8A FB		     1			mov	H,L
+ EE02  E9 127B		     2			jmp	continue
+				M1	0EFH	
+ = 00F0			     1		op2	= 0EFH + 1
+						LD	H,M
+ EF00  8B FB		     1				mov	di,HL
+ EF02  81 E7 3FFF	     1				and	di,address_mask
+ EF06  8A 3D		     1				mov	H,M
+ EF08  E9 1175		     2			jmp	continue
+				;-------------------------
+				M1	0F0H
+ = 00F1			     1		op2	= 0F0H + 1
+						LD	L,A
+ F000  8A D8		     1			mov	L,A
+ F002  E9 107B		     2			jmp	continue
+				M1	0F1H
+ = 00F2			     1		op2	= 0F1H + 1
+						LD	L,B
+ F100  8A 1E 4001	     1				mov	L,B
+ F104  E9 0F79		     2			jmp	continue
+				M1	0F2H
+ = 00F3			     1		op2	= 0F2H + 1
+						LD	L,C_reg
+ F200  8A 1E 4000	     1				mov	L,C_reg
+ F204  E9 0E79		     2			jmp	continue
+				M1	0F3H
+ = 00F4			     1		op2	= 0F3H + 1
+						LD	L,D
+ F300  8A DE		     1			mov	L,D
+ F302  E9 0D7B		     2			jmp	continue
+				M1	0F4H
+ = 00F5			     1		op2	= 0F4H + 1
+						LD	L,E
+ F400  8A DA		     1			mov	L,E
+ F402  E9 0C7B		     2			jmp	continue
+				M1	0F5H
+ = 00F6			     1		op2	= 0F5H + 1
+						LD	L,H
+ F500  8A DF		     1			mov	L,H
+ F502  E9 0B7B		     2			jmp	continue
+				M1	0F6H
+ = 00F7			     1		op2	= 0F6H + 1
+						LD	L,L
+ F600  E9 0A7D		     2			jmp	continue
+				M1	0F7H
+ = 00F8			     1		op2	= 0F7H + 1
+						LD	L,M
+ F700  8B FB		     1				mov	di,HL
+ F702  81 E7 3FFF	     1				and	di,address_mask
+ F706  8A 1D		     1				mov	L,M
+ F708  E9 0975		     2			jmp	continue
+				;--------------------------
+				M1	0F8H
+ = 00F9			     1		op2	= 0F8H + 1
+						LD	M,A
+ F800  8B FB		     1				mov	di,HL
+ F802  81 E7 3FFF	     1				and	di,address_mask
+ F806  88 05		     1				mov	M,A
+ F808  E9 0875		     2			jmp	continue
+				M1	0F9H
+ = 00FA			     1		op2	= 0F9H + 1
+						LD	M,B
+ F900  8B FB		     1				mov	di,HL
+ F902  81 E7 3FFF	     1				and	di,address_mask
+ F906  8A 2E 4001	     1				mov	temp_h,B
+ F90A  88 2D		     1				mov	M,temp_h
+ F90C  E9 0771		     2			jmp	continue
+				M1	0FAH
+ = 00FB			     1		op2	= 0FAH + 1
+						LD	M,C_reg
+ FA00  8B FB		     1				mov	di,HL
+ FA02  81 E7 3FFF	     1				and	di,address_mask
+ FA06  8A 2E 4000	     1				mov	temp_h,C_reg
+ FA0A  88 2D		     1				mov	M,temp_h
+ FA0C  E9 0671		     2			jmp	continue
+				M1	0FBH
+ = 00FC			     1		op2	= 0FBH + 1
+						LD	M,D
+ FB00  8B FB		     1				mov	di,HL
+ FB02  81 E7 3FFF	     1				and	di,address_mask
+ FB06  88 35		     1				mov	M,D
+ FB08  E9 0575		     2			jmp	continue
+				M1	0FCH
+ = 00FD			     1		op2	= 0FCH + 1
+						LD	M,E
+ FC00  8B FB		     1				mov	di,HL
+ FC02  81 E7 3FFF	     1				and	di,address_mask
+ FC06  88 15		     1				mov	M,E
+ FC08  E9 0475		     2			jmp	continue
+				M1	0FDH
+ = 00FE			     1		op2	= 0FDH + 1
+						LD	M,H
+ FD00  8B FB		     1				mov	di,HL
+ FD02  81 E7 3FFF	     1				and	di,address_mask
+ FD06  88 3D		     1				mov	M,H
+ FD08  E9 0375		     2			jmp	continue
+				M1	0FEH
+ = 00FF			     1		op2	= 0FEH + 1
+						LD	M,L
+ FE00  8B FB		     1				mov	di,HL
+ FE02  81 E7 3FFF	     1				and	di,address_mask
+ FE06  88 1D		     1				mov	M,L
+ FE08  E9 0275		     2			jmp	continue
+				M1	0FFH
+ = 0100			     1		op2	= 0FFH + 1
+						HLT08	code_HLT_FF
+ FF00  8B 0E 4000	     1			mov	temp,reg_w
+ FF04  BF 00FF		     1			mov	di,code_HLT_FF
+ FF07  CB		     1			retf
+
+				;================================================
+ FF08  8C C8			exe_start:	mov	ax,cs
+ FF0A  8E D8					mov	ds,ax
+ FF0C  BA 0008 R				mov	dx,offset exe_msg
+ FF0F  B4 09					mov	ah,09h
+ FF11  CD 21					int	21h
+ FF13  B8 4C00					mov	ax,4c00h
+ FF16  CD 21					int	21h
+
+ 0000						.data
+						.stack
+
+						end	exe_start
+ 
+Microsoft (R) Macro Assembler Version 6.00AD    	    06/01/25 13:37:13
+8008em.asm						     Symbols 2 - 1
+
+
+
+
+Macros:
+
+                N a m e                 Type
+
+ADC8 . . . . . . . . . . . . . .	Proc
+ADD8 . . . . . . . . . . . . . .	Proc
+ANA  . . . . . . . . . . . . . .	Proc
+CALL80 . . . . . . . . . . . . .	Proc
+CPA  . . . . . . . . . . . . . .	Proc
+DCR  . . . . . . . . . . . . . .	Proc
+HLT08  . . . . . . . . . . . . .	Proc
+IN08 . . . . . . . . . . . . . .	Proc
+INR  . . . . . . . . . . . . . .	Proc
+JP80 . . . . . . . . . . . . . .	Proc
+LD . . . . . . . . . . . . . . .	Proc
+M1 . . . . . . . . . . . . . . .	Proc
+MVI  . . . . . . . . . . . . . .	Proc
+ORA  . . . . . . . . . . . . . .	Proc
+OUT08  . . . . . . . . . . . . .	Proc
+RET80  . . . . . . . . . . . . .	Proc
+RST  . . . . . . . . . . . . . .	Proc
+SBC8 . . . . . . . . . . . . . .	Proc
+SUB8 . . . . . . . . . . . . . .	Proc
+XRA  . . . . . . . . . . . . . .	Proc
+fetch1 . . . . . . . . . . . . .	Proc
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+DGROUP . . . . . . . . . . . . .	GROUP
+_DATA  . . . . . . . . . . . . .	16 Bit	 0000	  Word	  Public  'DATA'	
+STACK  . . . . . . . . . . . . .	16 Bit	 0400	  Para	  Stack	  'STACK'	 
+_TEXT  . . . . . . . . . . . . .	16 Bit	 FF18	  Word	  Public  'CODE'	
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+@CodeSize  . . . . . . . . . . .	Number	 0000h	 
+@DataSize  . . . . . . . . . . .	Number	 0000h	 
+@Interface . . . . . . . . . . .	Number	 0000h	 
+@Model . . . . . . . . . . . . .	Number	 0002h	 
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 DGROUP
+@fardata?  . . . . . . . . . . .	Text   	 FAR_BSS
+@fardata . . . . . . . . . . . .	Text   	 FAR_DATA
+@stack . . . . . . . . . . . . .	Text   	 DGROUP
+A  . . . . . . . . . . . . . . .	Text   	 al
+B  . . . . . . . . . . . . . . .	Text   	 reg_h
+C_reg  . . . . . . . . . . . . .	Text   	 reg_l
+D  . . . . . . . . . . . . . . .	Text   	 dh
+E  . . . . . . . . . . . . . . .	Text   	 dl
+HL . . . . . . . . . . . . . . .	Text   	 bx
+H  . . . . . . . . . . . . . . .	Text   	 bh
+L  . . . . . . . . . . . . . . .	Text   	 bl
+M  . . . . . . . . . . . . . . .	Text   	 byte ptr ds:[di]
+PC80 . . . . . . . . . . . . . .	Text   	 si
+SP80 . . . . . . . . . . . . . .	Text   	 bp
+address_mask . . . . . . . . . .	Number	 3FFFh	 
+code_HLT_00  . . . . . . . . . .	Number	 00FDh	 
+code_HLT_01  . . . . . . . . . .	Number	 00FEh	 
+code_HLT_FF  . . . . . . . . . .	Number	 00FFh	 
+code_step  . . . . . . . . . . .	Number	 00FBh	 
+code_undef1  . . . . . . . . . .	Number	 00FCh	 
+continue . . . . . . . . . . . .	L Near	 0080	  _TEXT	
+em_break . . . . . . . . . . . .	L Near	 00A1	  _TEXT	
+entry  . . . . . . . . . . . . .	L Near	 00E0	  _TEXT	
+exe_count  . . . . . . . . . . .	L Near	 0091	  _TEXT	
+exe_msg  . . . . . . . . . . . .	Byte	 0008	  _TEXT	
+exe_start  . . . . . . . . . . .	L Near	 FF08	  _TEXT	
+op2  . . . . . . . . . . . . . .	Number	 0100h	 
+reg_h  . . . . . . . . . . . . .	Text   	 byte ptr ds:[4001h]
+reg_l  . . . . . . . . . . . . .	Text   	 byte ptr ds:[4000h]
+reg_w  . . . . . . . . . . . . .	Text   	 word ptr ds:[4000h]
+stack_area . . . . . . . . . . .	Number	 4004h	 
+stack_mask . . . . . . . . . . .	Number	 000Fh	 
+step_flg . . . . . . . . . . . .	Text   	 word ptr ds:[4002h]
+temp_h . . . . . . . . . . . . .	Text   	 ch
+temp_l . . . . . . . . . . . . .	Text   	 cl
+temp . . . . . . . . . . . . . .	Text   	 cx
+
+	   0 Warnings
+	   0 Errors
