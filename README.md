@@ -109,11 +109,6 @@ https://www.scelbi.com/
 実数型 SCELBAL BASIC はソース含め公開されています。  
 https://www.willegal.net/scelbi/the8008andScelbi.html
 
-なお、SCELBALのバイナリはそのままでは動作せず  
-コメントに従い、入出力ルーチンの作成し、  
-最初（プログラムロードまたは入力前）に SCRコマンドにて  
-ワークエリアを初期化する必要がありました。  
-
 ## 変更履歴
 2025/6/1 Rev. 1.00	初回公開
 
