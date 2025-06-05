@@ -3,7 +3,7 @@
 x86系CPUで8008機械語を解釈して実行するモジュールです。  
 
 本モジュールは 8008CPU用 実数型BASIC SCELBAL BASICを  
-MS-DOS上で実行する 8008 Player for generic MS-DOS の  
+MS-DOS上で実行する 8008 loader for generic MS-DOS の  
 8008コードエミュレーションモジュールとして開発しました。  
 
 出来上がった 8008EM.BINはOSに依存しないため  
