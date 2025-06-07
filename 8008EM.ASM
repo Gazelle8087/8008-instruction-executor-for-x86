@@ -1,4 +1,4 @@
-;	8008 instruction executor for x86 Rev. 1.00
+;	8008 instruction executor for x86 Rev. 1.01
 ;
 ;	Copyright (C) 2025 by Gazelle
 ;
@@ -26,6 +26,7 @@
 ;Repository https://github.com/Gazelle8087/8008-instruction-executor-for-x86
 ;
 ;2025/6/1 Rev. 1.00 Initial release
+;2025/6/7 Rev. 1.01 Break count optimization for speed up
 
 	page 0,100
 	.model	small
@@ -86,9 +87,22 @@ reg_h		equ	byte ptr ds:[4001h]
 reg_l		equ	byte ptr ds:[4000h]
 reg_w		equ	word ptr ds:[4000h]
 ;-------------------------------------
-temp		equ	cx
-;temp		equ	dx
+;temp		equ	cx
+temp		equ	dx
+SP80		equ	bp
+;SP80		equ	di
 ;-------------------------------------
+ifidni		SP80,<bp>
+step_counter	equ	di
+exit_code	equ	di
+masked_HL	equ	di
+
+elseifidni	SP80,<di>
+step_counter	equ	bp
+exit_code	equ	bp
+masked_HL	equ	bp
+endif
+
 ifidni		temp,<dx>
 temp_h		equ	dh
 temp_l		equ	dl
@@ -96,6 +110,7 @@ B		equ	ch
 C_reg		equ	cl
 D		equ	reg_h
 E		equ	reg_l
+
 elseifidni	temp,<cx>
 temp_h		equ	ch
 temp_l		equ	cl
@@ -106,57 +121,81 @@ E		equ	dl
 endif
 
 PC80		equ	si
-SP80		equ	bp
-HL		equ	bx
-
 A		equ	al
 H		equ	bh
 L		equ	bl
-M		equ	byte ptr ds:[di]
-;======================================
-		org	80h
-continue:
-		mov	di,step_flg
-		and	di,di
-		jnz	exe_count
+;--------------------------------------
+mask3FFF	equ	1
 
-		mov	temp_h,ds:[PC80]
-		inc	PC80
-		and	PC80,address_mask
-		jmp	temp
-exe_count:
-		dec	di
-		mov	step_flg,di
-		jz	em_break
+if	mask3FFF
 
-		mov	temp_h,ds:[PC80]
-		inc	PC80
+PC_mask		macro
 		and	PC80,address_mask
-		jmp	temp
-em_break:
-		mov	temp,reg_w
-		mov	di,code_step
-		retf
+		endm
+
+HL_mask		macro
+		mov	masked_HL,bx
+		and	masked_HL,address_mask
+		endm
+
+SP_mask		macro
+		and	SP80,stack_mask
+		endm
+
+M		equ	byte ptr ds:[masked_HL]
+
+else
+
+PC_mask		macro
+		endm
+
+HL_mask		macro
+		endm
+
+SP_mask		macro
+		and	SP80,stack_mask
+		endm
+
+M		equ	byte ptr ds:[bx]
+
+endif
 ;=======================================
 		org	0e0h
 entry:
 		mov	reg_w,temp
-		and	SP80,stack_mask
-		mov	ds:step_flg,di
+		SP_mask
+		mov	ds:step_flg,step_counter
 
 		mov	temp_h,ds:[PC80]
 		mov	temp_l,0
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		jmp	temp
 ;======================================
 fetch1		macro
-		jmp	continue
+		local	fetch11,fetch12
 
-;		mov	temp_h,ds:[PC80]
-;		inc	PC80
-;		and	PC80,address_mask
-;		jmp	temp
+		mov	step_counter,step_flg
+		and	step_counter,step_counter
+		jnz	fetch11
+
+		mov	temp_h,ds:[PC80]
+		inc	PC80
+		PC_mask
+		jmp	temp
+fetch11:
+		dec	step_counter
+		mov	step_flg,step_counter
+		jz	fetch12
+
+		mov	temp_h,ds:[PC80]
+		inc	PC80
+		PC_mask
+		jmp	temp
+fetch12:
+		mov	temp,reg_w
+		mov	exit_code,code_step
+		retf
 endm
 ;======= M1 cycle ===============================
 
@@ -172,15 +211,14 @@ elseifidni	dst,reg_h
 		mov	dst,temp_h
 
 elseifidni	dst,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 		mov	temp_h,ds:[PC80]
 		mov	dst,temp_h
 else
 		mov	dst,ds:[PC80]
 endif
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 endm
 
@@ -206,8 +244,7 @@ endm
 ;--- LD ??,??
 ;LD		macro	dst,src
 ;
-;		mov	di,HL
-;		and	di,address_mask
+;		HL_mask
 ;		mov	temp_h,src
 ;		mov	dst,temp_h
 ;
@@ -226,8 +263,7 @@ else
 			mov	dst,temp_h
 
 		elseifidni	src,M
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	temp_h,src
 			mov	dst,temp_h
 		else
@@ -241,8 +277,7 @@ else
 			mov	dst,temp_h
 
 		elseifidni	dst,M
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	temp_h,src
 			mov	dst,temp_h
 		else
@@ -258,8 +293,7 @@ else
 
 		elseifidni	src,M
 
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	temp_h,src
 			mov	dst,temp_h
 
@@ -276,8 +310,7 @@ else
 
 		elseifidni	dst,M
 
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	temp_h,src
 			mov	dst,temp_h
 
@@ -289,21 +322,18 @@ else
 	
 		ifidni		src,reg_l
 
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	temp_h,src
 			mov	dst,temp_h
 
 		elseifidni	src,reg_h
 
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	temp_h,src
 			mov	dst,temp_h
 
 		else
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	dst,src
 		endif
 
@@ -311,21 +341,18 @@ else
 
 		ifidni		dst,reg_l
 
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	temp_h,src
 			mov	dst,temp_h
 
 		elseifidni	dst,reg_h
 
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	temp_h,src
 			mov	dst,temp_h
 
 		else
-			mov	di,HL
-			and	di,address_mask
+			HL_mask
 			mov	dst,src
 		endif
 	else
@@ -341,8 +368,7 @@ endm
 ADD8	macro	src
 
 ifidni	src,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 endif
 		add	A,src
 		lahf
@@ -353,8 +379,7 @@ endm
 ADC8		macro	src
 
 ifidni	src,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 endif
 		sahf
 		adc	A,src
@@ -366,8 +391,7 @@ endm
 SUB8	macro	src
 
 ifidni	src,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 endif
 		sub	A,src
 		lahf
@@ -378,8 +402,7 @@ endm
 SBC8	macro	src
 
 ifidni	src,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 endif
 		sahf
 		sbb	A,src
@@ -391,8 +414,7 @@ endm
 ANA	macro	src
 
 ifidni	src,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 endif
 		and	A,src
 		lahf
@@ -403,8 +425,7 @@ endm
 ORA	macro	src
 
 ifidni	src,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 endif
 		or	A,src
 		lahf
@@ -415,8 +436,7 @@ endm
 XRA	macro	src
 
 ifidni	src,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 endif
 		xor	A,src
 		lahf
@@ -427,8 +447,7 @@ endm
 CPA	macro	src
 
 ifidni	src,M
-		mov	di,HL
-		and	di,address_mask
+		HL_mask
 endif
 		cmp	A,src
 		lahf
@@ -437,23 +456,24 @@ endm
 
 ;--- CALL cc,nn
 CALL80		macro	cc
+local		callxx
 
 ifnb		<cc>
 		sahf
-		j&cc	@f
+		j&cc	callxx
 		add	PC80,2
-		and	PC80,address_mask
+		PC_mask
 		fetch1
-@@:
+callxx:
 endif
 		mov	temp_l,ds:[PC80]
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		mov	temp_h,ds:[PC80]
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		add	SP80,2
-		and	SP80,stack_mask
+		SP_mask
 		mov	ds:[SP80+stack_area],PC80
 		mov	PC80,temp
 		mov	temp_l,0
@@ -462,18 +482,19 @@ endm
 
 ;--- JP cc,nn
 JP80		macro	cc
+local		jpxx
 
 ifnb		<cc>
 		sahf
-		j&cc	@f
+		j&cc	jpxx
 		add	PC80,2
-		and	PC80,address_mask
+		PC_mask
 		fetch1
-@@:
+jpxx:
 endif
 		mov	temp_l,ds:[PC80]
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		mov	temp_h,ds:[PC80]
 		mov	PC80,temp
 		mov	temp_l,0
@@ -482,22 +503,24 @@ endm
 
 ;--- RET cc
 RET80		macro	cc
+local		retxx
+
 ifnb		<cc>
 		sahf
-		j&cc	@f
+		j&cc	retxx
 		fetch1
-@@:
+retxx:
 endif
 		mov	PC80,ds:[SP80+stack_area]
 		sub	SP80,2
-		and	SP80,stack_mask
+		SP_mask
 		fetch1
 endm
 
 ;--- RST n
 RST		macro	nn
 		add	SP80,2
-		and	SP80,stack_mask
+		SP_mask
 		mov	ds:[SP80+stack_area],PC80
 		mov	PC80,nn
 		fetch1
@@ -506,21 +529,21 @@ endm
 ;--- IN n
 IN08		macro	nn
 		mov	temp,reg_w
-		mov	di,nn
+		mov	exit_code,nn
 		retf
 endm
 
 ;--- OUT n
 OUT08		macro	nn
 		mov	temp,reg_w
-		mov	di,nn
+		mov	exit_code,nn
 		retf
 endm
 
 ;---- HLT
 HLT08		macro	nn
 		mov	temp,reg_w
-		mov	di,nn
+		mov	exit_code,nn
 		retf
 endm
 ;======================================
@@ -530,7 +553,7 @@ M1	macro	nn
 	rept	nn - op2
 		org	op2 * 100h
 		mov	temp,reg_w
-		mov	di,code_undef1
+		mov	exit_code,code_undef1
 		retf
 		op2	= op2 + 1
 	endm
@@ -541,7 +564,7 @@ endm
 M1	00				;HLT
 		HLT08	code_HLT_00
 
-exe_msg		db	0dh,0ah,'8008 instruction executor for x86 Rev. 1.00  ',0dh,0ah
+exe_msg		db	0dh,0ah,'8008 instruction executor for x86 Rev. 1.01  ',0dh,0ah
 		db	'Copyright (c) 2025 by Gazelle.  ',0dh,0ah
 		db	'https://github.com/Gazelle8087  ',0dh,0ah,24h
 
@@ -559,7 +582,7 @@ M1	04				;ADI	n
 		add	A,ds:[PC80]
 		lahf
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 M1	05				;RST	0	
 		RST	0
@@ -584,7 +607,7 @@ M1	0CH				;ACI	nn
 		adc	A,ds:[PC80]
 		lahf
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 M1	0DH				;RST	1
 		RST	8
@@ -608,7 +631,7 @@ M1	14H				;SUI	nn
 		sub	A,ds:[PC80]
 		lahf
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 M1	15H				;RST	2
 		RST	10h
@@ -633,7 +656,7 @@ M1	1CH				;SBI	n
 		sbb	A,ds:[PC80]
 		lahf
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 M1	1DH				;RST	3
 		RST	18H
@@ -652,7 +675,7 @@ M1	24H				;ANI	n
 		AND	A,ds:[PC80]
 		lahf
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 M1	25H				;RST	4
 		RST	20H
@@ -671,7 +694,7 @@ M1	2CH				;XRI	n
 		XOR	A,ds:[PC80]
 		lahf
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 M1	2DH				;RST	5
 		RST	28H
@@ -690,7 +713,7 @@ M1	34H				;ORI	nn
 		OR	A,ds:[PC80]
 		lahf
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 M1	35H				;RST	6
 		RST	30H
@@ -705,7 +728,7 @@ M1	3CH				;CPI	nn
 		CMP	A,ds:[PC80]
 		lahf
 		inc	PC80
-		and	PC80,address_mask
+		PC_mask
 		fetch1
 M1	3DH				;RST	7
 		RST	38h
