@@ -110,5 +110,5 @@ https://www.scelbi.com/
 https://www.willegal.net/scelbi/the8008andScelbi.html
 
 ## 変更履歴
-2025/6/1 Rev. 1.00 初回公開
-2025/6/7 Rev. 1.01 ブレークカウンタ処理を改善し高速化しました
+2025/6/1 Rev. 1.00 初回公開  
+2025/6/7 Rev. 1.01 ブレークカウンタ処理を改善し高速化しました  
